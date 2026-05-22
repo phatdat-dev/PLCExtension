@@ -1,0 +1,32 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Version>1.0.1</Version>
+    <TargetFramework>net10.0</TargetFramework>
+    <PackageId>PLCExtension</PackageId>
+    <OutputType>Library</OutputType>
+    <Authors>Datz</Authors>
+    <AssemblyTitle>PLC Extension Library</AssemblyTitle>
+    <Description>A comprehensive .NET library for PLC data handling and extensions</Description>
+    <RepositoryUrl>https://github.com/phatdat-dev/PLCExtension.git</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/phatdat-dev/PLCExtension</PackageProjectUrl>
+    <PackageTags>plc;extension;industrial;automation</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <LangVersion>latest</LangVersion>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="McpX" Version="0.6.0" />
+    <PackageReference Include="Microsoft.OpenApi" Version="3.5.3" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>
