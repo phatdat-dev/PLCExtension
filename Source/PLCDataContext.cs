@@ -3,7 +3,6 @@ using System.Text;
 using System.ComponentModel;
 using McpXLib;
 using McpXLib.Enums;
-using Microsoft.OpenApi;
 using Newtonsoft.Json;
 using System.Linq.Expressions;
 
@@ -60,11 +59,11 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         string addressPart = addressStr.Substring(1);
 
         var prefixes = Enum.GetValues(typeof(Prefix)).Cast<Prefix>().ToList();
-        var matchedPrefix = prefixes.FirstOrDefault(p => p.GetDisplayName() == deviceChar.ToString());
+        var matchedPrefix = prefixes.FirstOrDefault(p => Enum.GetName(typeof(Prefix), p) == deviceChar.ToString());
 
         if (matchedPrefix == default)
         {
-            var supportedTypes = string.Join(", ", prefixes.Select(p => p.GetDisplayName()));
+            var supportedTypes = string.Join(", ", prefixes.Select(p => Enum.GetName(typeof(Prefix), p)));
             throw new ArgumentException($"Unknown device type: {deviceChar}. Supported types: {supportedTypes}");
         }
 
