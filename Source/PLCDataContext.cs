@@ -34,6 +34,12 @@ public abstract class PLCDataContext : INotifyPropertyChanged
     private readonly SemaphoreSlim PlcLock = new(1, 1);
 
     /// <summary>
+    /// CallBack for custom logging or debugging. Can be overridden by derived classes to implement specific logging behavior.
+    /// </summary>
+    /// <param name="message"></param>
+    protected virtual string CustomMessage(string message) => message;
+
+    /// <summary>
     /// Gets PLCAddress information from mapping or attribute.
     /// Prioritizes mapping if available, otherwise uses attribute from property.
     /// </summary>
@@ -83,7 +89,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            Printt.Red($"Error ReadBoolAsync at {address}: {ex.Message}");
+            Printt.Red(CustomMessage($"Error ReadBoolAsync at {address}: {ex.Message}"));
             throw;
         }
         finally { PlcLock.Release(); }
@@ -102,7 +108,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            Printt.Red($"Error writing bool to PLC at {address}: {ex.Message}");
+            Printt.Red(CustomMessage($"Error writing bool to PLC at {address}: {ex.Message}"));
             throw;
         }
         finally { PlcLock.Release(); }
@@ -121,7 +127,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         }
         catch
         {
-            Printt.Red($"Error ReadWordsAsync at {address} with length {length}");
+            Printt.Red(CustomMessage($"Error ReadWordsAsync at {address} with length {length}"));
             throw;
         }
         finally { PlcLock.Release(); }
@@ -140,7 +146,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         }
         catch (Exception ex)
         {
-            Printt.Red($"Error writing words to PLC at {address}: {ex.Message}");
+            Printt.Red(CustomMessage($"Error writing words to PLC at {address}: {ex.Message}"));
             throw;
         }
         finally { PlcLock.Release(); }
@@ -300,7 +306,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
             }
             catch (Exception ex)
             {
-                Printt.Red($"Error loading property {property.Name}: {ex.Message}");
+                Printt.Red(CustomMessage($"Error loading property {property.Name}: {ex.Message}"));
                 throw;
             }
         }
@@ -325,7 +331,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
             }
             catch (Exception ex)
             {
-                Printt.Red($"Error saving property {property.Name}: {ex.Message}");
+                Printt.Red(CustomMessage($"Error saving property {property.Name}: {ex.Message}"));
                 throw;
             }
         }
@@ -367,12 +373,12 @@ public abstract class PLCDataContext : INotifyPropertyChanged
                     OnPropertyChanged(property.Name);
                     OnPropertyValueChanged(property.Name, oldValue, newValue);
 
-                    Printt.Default($"[CHANGE] {GetType().Name}.{property.Name}: {oldValue} → {newValue}");
+                    Printt.Default(CustomMessage($"[CHANGE] {GetType().Name}.{property.Name}: {oldValue} → {newValue}"));
                 }
             }
             catch (Exception ex)
             {
-                Printt.Red($"Error polling property {property.Name}: {ex.Message}");
+                Printt.Red(CustomMessage($"Error polling property {property.Name}: {ex.Message}"));
                 throw;
             }
         }
