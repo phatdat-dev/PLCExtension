@@ -472,6 +472,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
     /// </summary>
     public async Task WriteValueAsync(PropertyInfo property, PLCAddressAttribute attr, object? value)
     {
+        if (attr.ReadOnly) return; // Skip read-only properties
         var propertyType = property.PropertyType;
         var effectiveLength = PLCTypeHelper.GetEffectiveLength(property, attr);
 
@@ -856,4 +857,5 @@ public class PLCFieldMap
     public string Address { get; set; } = string.Empty;
     public ushort Length { get; set; }
     public string Description { get; set; } = string.Empty;
+    public bool ReadOnly { get; set; }
 }

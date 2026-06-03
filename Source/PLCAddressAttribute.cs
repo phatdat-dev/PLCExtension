@@ -30,10 +30,16 @@ public class PLCAddressAttribute : Attribute
     /// </summary>
     public string? Description { get; set; }
 
-    public PLCAddressAttribute(string address, ushort length = 0, string? description = null)
+    /// <summary>
+    /// Indicates if the property is read-only (write-protected).
+    /// </summary>
+    public bool ReadOnly { get; set; }
+
+    public PLCAddressAttribute(string address, ushort length = 0, string? description = null, bool readOnly = false)
     {
         Address = address;
         Length = length;
         Description = description;
+        ReadOnly = readOnly;
     }
 }

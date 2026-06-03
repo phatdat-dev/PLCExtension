@@ -68,8 +68,7 @@ public static class PLCTypeHelper
             throw new ArgumentNullException(nameof(attr));
 
         // If Length is explicitly specified (> 0), use that value
-        if (attr.Length > 0)
-            return attr.Length;
+        if (attr.Length > 0) return attr.Length;
 
         // Automatically calculate based on data type
         return GetWordLength(property.PropertyType);
@@ -83,7 +82,6 @@ public static class PLCTypeHelper
     /// </summary>
     public static bool NeedsExplicitLength(Type propertyType)
     {
-        return propertyType == typeof(string) ||
-               (propertyType.IsArray && propertyType != typeof(bool[]));
+        return propertyType == typeof(string) || (propertyType.IsArray && propertyType != typeof(bool[]));
     }
 }
