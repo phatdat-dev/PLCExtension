@@ -23,37 +23,6 @@ public static class PLCDataExtensions
     }
 
     /// <summary>
-    /// Creates a detailed report of properties and their PLC addresses.
-    /// </summary>
-    public static string GetPLCMapping(this PLCDataContext obj)
-    {
-        var sb = new StringBuilder();
-        var props = obj.GetPLCProperties();
-
-        sb.AppendLine($"=== PLC Data Mapping for {obj.GetType().Name} ===");
-        sb.AppendLine();
-
-        foreach (var (prop, addr) in props)
-        {
-            var value = prop.GetValue(obj);
-            var displayValue = value?.ToString() ?? "(null)";
-            if (value is short[] arr)
-                displayValue = $"[{string.Join(", ", arr)}]";
-
-            sb.AppendLine($"Property: {prop.Name}");
-            sb.AppendLine($"  Address: {addr.Address}");
-            sb.AppendLine($"  Length: {addr.Length}");
-            sb.AppendLine($"  Type: {prop.PropertyType.Name}");
-            sb.AppendLine($"  Value: {displayValue}");
-            if (!string.IsNullOrEmpty(addr.Description))
-                sb.AppendLine($"  Description: {addr.Description}");
-            sb.AppendLine();
-        }
-
-        return sb.ToString();
-    }
-
-    /// <summary>
     /// Clones values from one PLC data object to another (of the same type).
     /// </summary>
     public static void CopyValuesFrom(this PLCDataContext destination, PLCDataContext source)

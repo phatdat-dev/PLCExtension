@@ -13,7 +13,7 @@ using System.Linq.Expressions;
 public abstract class PLCDataContext : INotifyPropertyChanged
 {
     private McpX PlcDevice { get; set; }
-    private Dictionary<string, PLCFieldMap>? mapping;
+    private Dictionary<string, PLCAddressAttribute>? mapping;
 
     /// <summary>
     /// Event triggered when a property changes.
@@ -25,7 +25,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
     /// </summary>
     public event Action<string, object?, object?>? PropertyValueChanged;
     public PLCDataContext(McpX _plcDevice) { PlcDevice = _plcDevice; }
-    public PLCDataContext(McpX _plcDevice, Dictionary<string, PLCFieldMap> _mapping)
+    public PLCDataContext(McpX _plcDevice, Dictionary<string, PLCAddressAttribute> _mapping)
     {
         PlcDevice = _plcDevice;
         mapping = _mapping;
@@ -45,12 +45,17 @@ public abstract class PLCDataContext : INotifyPropertyChanged
     /// </summary>
     protected PLCAddressAttribute? GetPLCAddressInfo(PropertyInfo property)
     {
-        // Nếu có mapping, lấy từ mapping
+        var attr = property.GetCustomAttribute<PLCAddressAttribute>();
+        // if mapping exists and has entry for this property, use it to create PLCAddressAttribute
         if (mapping != null && mapping.TryGetValue(property.Name, out var fieldMap))
-            return new PLCAddressAttribute(fieldMap.Address, fieldMap.Length, fieldMap.Description);
+            return new PLCAddressAttribute(fieldMap?.Address ?? attr?.Address ?? string.Empty,
+                fieldMap?.Length ?? attr?.Length ?? 0,
+                fieldMap?.Description ?? attr?.Description,
+                fieldMap?.ReadOnly ?? attr?.ReadOnly ?? false
+            );
 
-        // Nếu không, lấy từ attribute
-        return property.GetCustomAttribute<PLCAddressAttribute>();
+        // if not, get from attribute
+        return attr;
     }
 
     /// <summary>
@@ -847,15 +852,4 @@ internal class PropertyChangeSubscription : IDisposable
         _unsubscribe = null;
         GC.SuppressFinalize(this);
     }
-}
-/// <summary>
-/// Used to map between property name and PLC address information when not wanting to use attribute directly on property.
-/// </summary>
-public class PLCFieldMap
-{
-    public string FieldName { get; set; } = string.Empty;
-    public string Address { get; set; } = string.Empty;
-    public ushort Length { get; set; }
-    public string Description { get; set; } = string.Empty;
-    public bool ReadOnly { get; set; }
 }

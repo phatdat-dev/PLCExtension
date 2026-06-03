@@ -82,38 +82,18 @@ await data.SaveAsync();
 Create `mapping.json` with format:
 
 ```json
-[
-  {
-    "fieldName": "ScanCommand",
+{
+  "ScanCommand": {
     "address": "M6011",
     "length": 1,
     "description": "QR Scan Command"
   },
-  {
-    "fieldName": "OkStatus",
+  "OkStatus": {
     "address": "M6012",
     "length": 1,
     "description": "OK Status"
-  },
-  {
-    "fieldName": "QRBarcode",
-    "address": "D6200",
-    "length": 100,
-    "description": "QR Buffer"
-  },
-  {
-    "fieldName": "RollSpeed",
-    "address": "D6300",
-    "length": 2,
-    "description": "Speed"
-  },
-  {
-    "fieldName": "RollLength",
-    "address": "D6310",
-    "length": 2,
-    "description": "Length"
   }
-]
+}
 ```
 
 #### 2. Define Data Class (No Attributes Needed)
@@ -122,7 +102,7 @@ Create `mapping.json` with format:
 public class SendRollMES : PLCDataContext
 {
     public SendRollMES(McpX plcDevice) : base(plcDevice) { }
-    public SendRollMES(McpX plcDevice, Dictionary<string, PLCFieldMap> mappings) : base(plcDevice, mappings) { }
+    public SendRollMES(McpX plcDevice, Dictionary<string, PLCAddressAttribute> mappings) : base(plcDevice, mappings) { }
 
     // Declare properties WITHOUT [PLCAddress] attribute
     public bool ScanCommand { get; set; }
@@ -139,15 +119,11 @@ public class SendRollMES : PLCDataContext
 // Read JSON file
 var json = File.ReadAllText("mapping.json");
 
-// Deserialize into List<PLCFieldMap>
-var fieldMapList = JsonSerializer.Deserialize<List<PLCFieldMap>>(json);
-
-// Convert to Dictionary (key: FieldName, value: PLCFieldMap)
-var mappings = fieldMapList!
-    .ToDictionary(x => x.FieldName, x => x);
+// Deserialize into List<PLCAddressAttribute>
+var fieldMapList = JsonSerializer.Deserialize<Dictionary<string, PLCAddressAttribute>>(json);
 
 // Initialize object with mapping
-var context = new SendRollMES(_plc, mappings);
+var context = new SendRollMES(_plc, fieldMapList);
 
 // Read from PLC (using JSON mapping)
 await context.LoadAsync();
@@ -430,12 +406,11 @@ private async Task InitializeWithMappingAsync()
 {
     // Load mapping from JSON file
     var json = File.ReadAllText("config/plc-mapping.json");
-    var fieldMaps = JsonSerializer.Deserialize<List<PLCFieldMap>>(json);
-    var mappings = fieldMaps!.ToDictionary(x => x.FieldName);
+    var fieldMaps = JsonSerializer.Deserialize<Dictionary<string, PLCAddressAttribute>>(json);
 
     // Initialize with mapping
-    var mesData = new SendRollMES(_plc, mappings);
-    var scanData = new QRScanData(_plc, mappings);
+    var mesData = new SendRollMES(_plc, fieldMaps);
+    var scanData = new QRScanData(_plc, fieldMaps);
 
     // Read data
     await mesData.LoadAsync();
@@ -635,9 +610,10 @@ Ensure address starts with `M` or `D`:
 
 // Or in JSON mapping:
 {
-    "fieldName": "MyFlag",
-    "address": "M100",    // Correct: starts with M or D
-    "length": 1
+    "MyFlag": {
+        "address": "M100",
+        "length": 1
+    }
 }
 ```
 
@@ -652,20 +628,21 @@ await data.SaveAsync(); // Required!
 
 ### Error: Mapping Not Found
 
-When using JSON mapping, ensure `fieldName` in JSON matches property name:
+When using JSON mapping, ensure the keys in JSON match property names:
 
 ```json
 {
-  "fieldName": "ScanCommand", // Must match property name
-  "address": "M6011",
-  "length": 1
+  "ScanCommand": {
+    "address": "M6011",
+    "length": 1
+  }
 }
 ```
 
 ```csharp
 public class MyData : PLCDataContext
 {
-    public bool ScanCommand { get; set; }  // Must match fieldName
+    public bool ScanCommand { get; set; }  // Must match "ScanCommand" in JSON
 }
 ```
 
