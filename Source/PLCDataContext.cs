@@ -12,7 +12,9 @@ using System.Linq.Expressions;
 /// </summary>
 public abstract class PLCDataContext : INotifyPropertyChanged
 {
+    [JsonIgnore]
     private McpX PlcDevice { get; set; }
+    [JsonIgnore]
     private Dictionary<string, PLCAddressAttribute>? mapping;
 
     /// <summary>
