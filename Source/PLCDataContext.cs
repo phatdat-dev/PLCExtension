@@ -148,6 +148,46 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
     }
 
     /// <summary>
+    /// Reads a specific property from PLC and updates the property value.
+    /// </summary>
+    /// <param name="property"></param>
+    /// <returns></returns>
+    public async Task LoadPropertyAsync(PropertyInfo property)
+    {
+        try
+        {
+            var attr = GetPLCAddressInfo(property)!;
+            var value = await ReadValueAsync(property, attr);
+            SetPropertyValue(property, value);
+        }
+        catch (Exception ex)
+        {
+            Printt.Red(CustomMessage($"Error loading property {property.Name}: {ex.Message}"));
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Writes a specific property value to PLC.
+    /// </summary>
+    /// <param name="property"></param>
+    /// <returns></returns>
+    public async Task SavePropertyAsync(PropertyInfo property)
+    {
+        try
+        {
+            var attr = GetPLCAddressInfo(property)!;
+            var value = property.GetValue(this);
+            await WriteValueAsync(property, attr, value);
+        }
+        catch (Exception ex)
+        {
+            Printt.Red(CustomMessage($"Error saving property {property.Name}: {ex.Message}"));
+            throw;
+        }
+    }
+
+    /// <summary>
     /// Reads a specific property from PLC.
     /// </summary>
     public async Task<object?> ReadValueAsync(string propertyName)
@@ -276,36 +316,6 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
     public string ToJsonString() => JsonConvert.SerializeObject(this);
 
     #region ==================== HELPERS ====================
-
-    private async Task LoadPropertyAsync(PropertyInfo property)
-    {
-        try
-        {
-            var attr = GetPLCAddressInfo(property)!;
-            var value = await ReadValueAsync(property, attr);
-            SetPropertyValue(property, value);
-        }
-        catch (Exception ex)
-        {
-            Printt.Red(CustomMessage($"Error loading property {property.Name}: {ex.Message}"));
-            throw;
-        }
-    }
-
-    private async Task SavePropertyAsync(PropertyInfo property)
-    {
-        try
-        {
-            var attr = GetPLCAddressInfo(property)!;
-            var value = property.GetValue(this);
-            await WriteValueAsync(property, attr, value);
-        }
-        catch (Exception ex)
-        {
-            Printt.Red(CustomMessage($"Error saving property {property.Name}: {ex.Message}"));
-            throw;
-        }
-    }
 
     private static string ExtractPropertyName<T>(
         Expression<Func<PLCDataContext, T>> expression)
