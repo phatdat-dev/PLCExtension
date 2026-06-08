@@ -35,6 +35,8 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
 
     private readonly SemaphoreSlim PlcLock = new(1, 1);
 
+    private IEnumerable<PropertyInfo> Properties => GetType().GetProperties().Where(p => GetPLCAddressInfo(p) != null);
+
     /// <summary>
     /// CallBack for custom logging or debugging. Can be overridden by derived classes to implement specific logging behavior.
     /// </summary>
@@ -89,21 +91,19 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
     /// </summary>
     public virtual async Task LoadAllSequentialAsync()
     {
-        var properties = GetType().GetProperties().Where(p => GetPLCAddressInfo(p) != null);
-        foreach (var property in properties)
+        foreach (var property in Properties)
             await LoadPropertyAsync(property);
     }
 
+#if NET6_0_OR_GREATER
     /// <summary>
     /// Reads all properties from PLC into the object in parallel.
     /// Uses Parallel.ForEachAsync to read multiple properties concurrently, improving performance for large number of properties. Be cautious of PLC read limits and ensure thread safety in PLC access.
     /// </summary>
     /// <returns></returns>
-#if NET6_0_OR_GREATER
     public virtual async Task LoadAllParallelAsync()
     {
-        var properties = GetType().GetProperties().Where(p => GetPLCAddressInfo(p) != null);
-        await Parallel.ForEachAsync(properties, async (property, ct) => await LoadPropertyAsync(property));
+        await Parallel.ForEachAsync(Properties, async (property, ct) => await LoadPropertyAsync(property));
     }
 #endif
 
@@ -113,8 +113,7 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
     /// <returns></returns>
     public virtual async Task LoadAllTasksAsync()
     {
-        var properties = GetType().GetProperties().Where(p => GetPLCAddressInfo(p) != null);
-        var tasks = properties.Select(async property => await LoadPropertyAsync(property));
+        var tasks = Properties.Select(async property => await LoadPropertyAsync(property));
         await Task.WhenAll(tasks);
     }
 
@@ -122,25 +121,30 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
     /// Writes all properties from object to PLC.
     /// Supports dynamic JSON mapping or property attributes.
     /// </summary>
-    public virtual async Task SaveAsync()
+    public virtual async Task SaveAllSequentialAsync()
     {
-        var properties = GetType().GetProperties()
-            .Where(p => GetPLCAddressInfo(p) != null && p.CanRead);
+        foreach (var property in Properties)
+            await SavePropertyAsync(property);
+    }
 
-        foreach (var property in properties)
-        {
-            try
-            {
-                var attr = GetPLCAddressInfo(property)!;
-                var value = property.GetValue(this);
-                await WriteValueAsync(property, attr, value);
-            }
-            catch (Exception ex)
-            {
-                Printt.Red(CustomMessage($"Error saving property {property.Name}: {ex.Message}"));
-                throw;
-            }
-        }
+#if NET6_0_OR_GREATER
+    /// <summary>    /// Writes all properties from object to PLC in parallel.
+    /// Uses Parallel.ForEachAsync for concurrent writes, improving performance for large number of properties. Be cautious of PLC write limits and ensure thread safety in PLC access.
+    /// </summary>
+    public virtual async Task SaveAllParallelAsync()
+    {
+        await Parallel.ForEachAsync(Properties, async (property, ct) => await SavePropertyAsync(property));
+    }
+#endif
+
+    /// <summary>
+    /// Writes all properties from object to PLC using Task.WhenAll for maximum concurrency.
+    /// </summary>
+    /// <returns></returns>
+    public virtual async Task SaveAllTasksAsync()
+    {
+        var tasks = Properties.Select(async property => await SavePropertyAsync(property));
+        await Task.WhenAll(tasks);
     }
 
     /// <summary>
@@ -284,6 +288,21 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
         catch (Exception ex)
         {
             Printt.Red(CustomMessage($"Error loading property {property.Name}: {ex.Message}"));
+            throw;
+        }
+    }
+
+    private async Task SavePropertyAsync(PropertyInfo property)
+    {
+        try
+        {
+            var attr = GetPLCAddressInfo(property)!;
+            var value = property.GetValue(this);
+            await WriteValueAsync(property, attr, value);
+        }
+        catch (Exception ex)
+        {
+            Printt.Red(CustomMessage($"Error saving property {property.Name}: {ex.Message}"));
             throw;
         }
     }

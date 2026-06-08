@@ -53,7 +53,7 @@ if (data.ScanCommand)
     data.RollSpeed = 500;
     data.RollLength = 120.5f;
 
-    await data.SaveAsync();
+    await data.SaveAllSequentialAsync();
 }
 ```
 
@@ -88,16 +88,16 @@ public class MachineStatusData : PLCDataContext
 
 Ý nghĩa tham số:
 
-| Tham số       | Ý nghĩa                                                                              |
-| ------------- | ------------------------------------------------------------------------------------ |
-| `address`     | Địa chỉ PLC, ví dụ `M100`, `D200`. Ký tự đầu được parse sang `McpXLib.Enums.Prefix`. |
-| `length`      | Số word cần đọc/ghi. Nếu bằng `0`, thư viện tự tính theo kiểu dữ liệu.               |
-| `description` | Mô tả để tài liệu hóa mapping.                                                       |
-| `readOnly`    | Nếu `true`, `SaveAsync()` và `WriteValueAsync()` sẽ bỏ qua property này khi ghi.     |
+| Tham số | Ý nghĩa |
+| --- | --- |
+| `address` | Địa chỉ PLC, ví dụ `M100`, `D200`. Ký tự đầu được parse sang `McpXLib.Enums.Prefix`. |
+| `length` | Số word cần đọc/ghi. Nếu bằng `0`, thư viện tự tính theo kiểu dữ liệu. |
+| `description` | Mô tả để tài liệu hóa mapping. |
+| `readOnly` | Nếu `true`, toàn bộ hàm save và `WriteValueAsync()` sẽ bỏ qua property này khi ghi. |
 
 ## Mapping runtime
 
-Dùng mapping runtime khi địa chỉ PLC cần cấu hình bên ngoài code hoặc thay đổi theo từng máy/line.
+Dùng mapping runtime khi địa chỉ PLC cần cấu hình bên ngoài code hoặc thay đổi theo từng máy, line, hoặc phiên bản PLC.
 
 ```csharp
 public class MachineStatusData : PLCDataContext
@@ -151,15 +151,21 @@ await data.LoadAllSequentialAsync();
 
 ## API đọc/ghi dữ liệu
 
-| Method                                                | Chức năng                                                                                                   |
-| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `LoadAllSequentialAsync()`                            | Đọc tất cả property có mapping, lần lượt từng property. Đây là lựa chọn an toàn mặc định.                   |
-| `LoadAllParallelAsync()`                              | Đọc tất cả property bằng `Parallel.ForEachAsync`. Phù hợp khi PLC/driver chịu được nhiều request đồng thời. |
-| `LoadAllTasksAsync()`                                 | Tạo task cho từng property và `Task.WhenAll`. Mức concurrency cao nhất.                                     |
-| `SaveAsync()`                                         | Ghi tất cả property có mapping và có thể đọc value. Property `readOnly` sẽ bị bỏ qua.                       |
-| `ReadValueAsync(string propertyName)`                 | Đọc một property từ PLC và trả về value. Method này không tự set value vào object.                          |
-| `WriteValueAsync(string propertyName, object? value)` | Ghi một value vào địa chỉ PLC của property tương ứng.                                                       |
-| `ToJsonString()`                                      | Serialize object hiện tại bằng `Newtonsoft.Json`. Field nội bộ như PLC device và mapping được ignore.       |
+Các hàm load và save được thiết kế theo từng cặp tương ứng:
+
+| Method | Chức năng |
+| --- | --- |
+| `LoadAllSequentialAsync()` | Đọc tất cả property có mapping, lần lượt từng property. Đây là lựa chọn an toàn mặc định. |
+| `SaveAllSequentialAsync()` | Ghi tất cả property có mapping, lần lượt từng property. Đây là lựa chọn an toàn mặc định. |
+| `LoadAllParallelAsync()` | Đọc tất cả property bằng `Parallel.ForEachAsync`. Chỉ có trên `net6.0` trở lên. |
+| `SaveAllParallelAsync()` | Ghi tất cả property bằng `Parallel.ForEachAsync`. Chỉ có trên `net6.0` trở lên. |
+| `LoadAllTasksAsync()` | Tạo task đọc cho từng property và chờ bằng `Task.WhenAll`. |
+| `SaveAllTasksAsync()` | Tạo task ghi cho từng property và chờ bằng `Task.WhenAll`. |
+| `ReadValueAsync(string propertyName)` | Đọc một property từ PLC và trả về value. Method này không tự set value vào object. |
+| `WriteValueAsync(string propertyName, object? value)` | Ghi một value vào địa chỉ PLC của property tương ứng. |
+| `ToJsonString()` | Serialize object hiện tại bằng `Newtonsoft.Json`. Field nội bộ như PLC device và mapping được ignore. |
+
+`SaveAllSequentialAsync()`, `SaveAllParallelAsync()`, `SaveAllTasksAsync()` và `WriteValueAsync()` đều tôn trọng `readOnly: true`.
 
 Ví dụ đọc/ghi một property:
 
@@ -168,19 +174,29 @@ var current = await data.ReadValueAsync(nameof(MachineStatusData.TotalCounter));
 await data.WriteValueAsync(nameof(MachineStatusData.ProductCode), "ROLL-001");
 ```
 
+## Chọn chế độ Load/Save
+
+Dùng chế độ sequential nếu bạn chưa chắc PLC driver và PLC đích chịu được nhiều request đồng thời.
+
+| Chế độ | Read | Save | Khi nào dùng |
+| --- | --- | --- | --- |
+| Sequential | `LoadAllSequentialAsync()` | `SaveAllSequentialAsync()` | Mặc định, thứ tự dễ kiểm soát, áp lực thấp nhất lên kết nối PLC. |
+| Parallel | `LoadAllParallelAsync()` | `SaveAllParallelAsync()` | Chỉ `net6.0+`; phù hợp khi nhiều property có thể xử lý đồng thời. |
+| Tasks | `LoadAllTasksAsync()` | `SaveAllTasksAsync()` | Concurrency cao nhất; dùng cẩn thận với giới hạn request của PLC. |
+
 ## Kiểu dữ liệu hỗ trợ
 
 `PLCDataContext` hiện đọc/ghi trực tiếp các kiểu sau:
 
-| Kiểu C#   |     Số word mặc định | Ghi chú                                                                  |
-| --------- | -------------------: | ------------------------------------------------------------------------ |
-| `bool`    |                    1 | Đọc/ghi bằng `Read<bool>` và `Write<bool>`.                              |
-| `string`  | 1 nếu không khai báo | Nên khai báo `length` rõ ràng để xác định buffer. Mỗi word chứa 2 ký tự. |
-| `int`     |                    2 | Convert qua 2 word, little-endian theo `BitConverter`.                   |
-| `float`   |                    2 | Khi đọc, giá trị được làm tròn 2 chữ số thập phân.                       |
-| `double`  |                    4 | Convert qua 4 word.                                                      |
-| `decimal` |                    8 | Convert qua 8 word.                                                      |
-| `short[]` |        Theo `length` | Dùng cho raw word buffer.                                                |
+| Kiểu C# | Số word mặc định | Ghi chú |
+| --- | ---: | --- |
+| `bool` | 1 | Đọc/ghi bằng `Read<bool>` và `Write<bool>`. |
+| `string` | 1 nếu không khai báo | Nên khai báo `length` rõ ràng để xác định buffer. Mỗi word chứa 2 ký tự. |
+| `int` | 2 | Convert qua 2 word, little-endian theo `BitConverter`. |
+| `float` | 2 | Khi đọc, giá trị được làm tròn 2 chữ số thập phân. |
+| `double` | 4 | Convert qua 4 word. |
+| `decimal` | 8 | Convert qua 8 word. |
+| `short[]` | Theo `length` | Dùng cho raw word buffer. |
 
 `PLCTypeHelper` có khai báo length mặc định cho thêm một số kiểu như `short`, `long`, array khác, nhưng `PLCDataContext.ReadValueAsync` và `WriteValueAsync` chỉ xử lý trực tiếp các kiểu trong bảng trên.
 
@@ -203,7 +219,6 @@ var subscription = data.WhenPropertyChanges<bool>(
         Console.WriteLine($"IsRunning = {isRunning}");
     });
 
-// Hủy subscribe khi không dùng nữa
 subscription.Dispose();
 ```
 
@@ -241,17 +256,25 @@ data.WhenPropertyChangesDebounced<string>(
     });
 ```
 
+Cũng có overload dùng expression:
+
+```csharp
+data.WhenPropertyChanges<string>(
+    x => ((MachineStatusData)x).ProductCode,
+    code => Console.WriteLine(code));
+```
+
 ## Extension methods
 
 `PLCDataExtensions` cung cấp một số helper cho object kế thừa `PLCDataContext`:
 
-| Method                       | Chức năng                                                                                  |
-| ---------------------------- | ------------------------------------------------------------------------------------------ |
-| `GetPLCProperties()`         | Lấy các property có attribute `[PLCAddress]`. Lưu ý: method này không đọc runtime mapping. |
-| `CopyValuesFrom(source)`     | Copy value giữa hai object cùng kiểu, dựa trên property có attribute.                      |
-| `ValuesEqual(other)`         | So sánh value giữa hai object cùng kiểu. Có xử lý riêng cho `short[]`.                     |
-| `ExportToDictionary()`       | Export value ra dictionary với key là địa chỉ PLC.                                         |
-| `ImportFromDictionary(data)` | Import value từ dictionary có key là địa chỉ PLC.                                          |
+| Method | Chức năng |
+| --- | --- |
+| `GetPLCProperties()` | Lấy các property có attribute `[PLCAddress]`. Lưu ý: method này không đọc runtime mapping. |
+| `CopyValuesFrom(source)` | Copy value giữa hai object cùng kiểu, dựa trên property có attribute. |
+| `ValuesEqual(other)` | So sánh value giữa hai object cùng kiểu. Có xử lý riêng cho `short[]`. |
+| `ExportToDictionary()` | Export value ra dictionary với key là địa chỉ PLC. |
+| `ImportFromDictionary(data)` | Import value từ dictionary có key là địa chỉ PLC. |
 
 Ví dụ:
 
@@ -281,5 +304,6 @@ public class MachineStatusData : PLCDataContext
 - Mỗi thao tác đọc/ghi cấp thấp dùng `SemaphoreSlim` nội bộ để khóa truy cập `McpX`.
 - Địa chỉ phải bắt đầu bằng prefix có trong `McpXLib.Enums.Prefix`, ví dụ `M`, `D`.
 - `ReadValueAsync(string)` chỉ trả value, không cập nhật property trong object.
-- `SaveAsync()` ghi tất cả property có mapping, trừ property `readOnly`.
+- Tất cả hàm save ghi các property có mapping, trừ property `readOnly`.
+- `LoadAllParallelAsync()` và `SaveAllParallelAsync()` chỉ được compile trên `net6.0` trở lên.
 - Với `string` và `short[]`, nên khai báo `length` rõ ràng để tránh đọc/ghi thiếu dữ liệu.

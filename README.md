@@ -4,7 +4,7 @@
 
 # PLCExtension
 
-`PLCExtension` is a .NET library that maps PLC data to strongly typed C# properties. Instead of manually reading and writing individual PLC addresses, define a class that inherits from `PLCDataContext`, map properties with `[PLCAddress]` or runtime mappings, then load and save data through the object.
+`PLCExtension` is a .NET library for mapping PLC data to strongly typed C# properties. Instead of manually reading and writing individual PLC addresses, define a class that inherits from `PLCDataContext`, map properties with `[PLCAddress]` or runtime mappings, then load and save data through the object.
 
 The package supports `netstandard2.0`, `net6.0`, `net7.0`, `net8.0`, `net9.0`, and `net10.0`. PLC communication is handled through `McpX`.
 
@@ -53,7 +53,7 @@ if (data.ScanCommand)
     data.RollSpeed = 500;
     data.RollLength = 120.5f;
 
-    await data.SaveAsync();
+    await data.SaveAllSequentialAsync();
 }
 ```
 
@@ -88,12 +88,12 @@ public class MachineStatusData : PLCDataContext
 
 Attribute parameters:
 
-| Parameter     | Description                                                                                         |
-| ------------- | --------------------------------------------------------------------------------------------------- |
-| `address`     | PLC address, for example `M100` or `D200`. The first character is parsed as `McpXLib.Enums.Prefix`. |
-| `length`      | Number of words to read/write. If `0`, the library calculates the length from the property type.    |
-| `description` | Optional description for documenting the mapping.                                                   |
-| `readOnly`    | If `true`, `SaveAsync()` and `WriteValueAsync()` skip this property when writing.                   |
+| Parameter | Description |
+| --- | --- |
+| `address` | PLC address, for example `M100` or `D200`. The first character is parsed as `McpXLib.Enums.Prefix`. |
+| `length` | Number of words to read/write. If `0`, the library calculates the length from the property type. |
+| `description` | Optional description for documenting the mapping. |
+| `readOnly` | If `true`, all save methods and `WriteValueAsync()` skip this property when writing. |
 
 ## Runtime Mapping
 
@@ -149,17 +149,23 @@ var data = new MachineStatusData(plc, mapping);
 await data.LoadAllSequentialAsync();
 ```
 
-## Read and Write API
+## Read and Save API
 
-| Method                                                | Description                                                                                                           |
-| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `LoadAllSequentialAsync()`                            | Reads all mapped properties one by one. This is the safest default option.                                            |
-| `LoadAllParallelAsync()`                              | Reads all mapped properties with `Parallel.ForEachAsync`. Use when the PLC/driver can handle concurrent requests.     |
-| `LoadAllTasksAsync()`                                 | Creates one task per mapped property and waits with `Task.WhenAll`. This is the highest-concurrency load mode.        |
-| `SaveAsync()`                                         | Writes all mapped readable properties. Properties marked `readOnly` are skipped.                                      |
-| `ReadValueAsync(string propertyName)`                 | Reads one property from the PLC and returns the value. It does not set the value on the object.                       |
-| `WriteValueAsync(string propertyName, object? value)` | Writes a value to the PLC address mapped to the property.                                                             |
-| `ToJsonString()`                                      | Serializes the current object with `Newtonsoft.Json`. Internal fields such as the PLC device and mapping are ignored. |
+The load and save APIs are intentionally paired:
+
+| Method | Description |
+| --- | --- |
+| `LoadAllSequentialAsync()` | Reads all mapped properties one by one. This is the safest default option. |
+| `SaveAllSequentialAsync()` | Writes all mapped properties one by one. This is the safest default option. |
+| `LoadAllParallelAsync()` | Reads all mapped properties with `Parallel.ForEachAsync`. Available on `net6.0` and later. |
+| `SaveAllParallelAsync()` | Writes all mapped properties with `Parallel.ForEachAsync`. Available on `net6.0` and later. |
+| `LoadAllTasksAsync()` | Creates one read task per mapped property and waits with `Task.WhenAll`. |
+| `SaveAllTasksAsync()` | Creates one write task per mapped property and waits with `Task.WhenAll`. |
+| `ReadValueAsync(string propertyName)` | Reads one property from the PLC and returns the value. It does not set the value on the object. |
+| `WriteValueAsync(string propertyName, object? value)` | Writes one value to the PLC address mapped to the property. |
+| `ToJsonString()` | Serializes the current object with `Newtonsoft.Json`. Internal fields such as the PLC device and mapping are ignored. |
+
+`SaveAllSequentialAsync()`, `SaveAllParallelAsync()`, `SaveAllTasksAsync()`, and `WriteValueAsync()` all respect `readOnly: true`.
 
 Read or write a single property:
 
@@ -168,19 +174,29 @@ var current = await data.ReadValueAsync(nameof(MachineStatusData.TotalCounter));
 await data.WriteValueAsync(nameof(MachineStatusData.ProductCode), "ROLL-001");
 ```
 
+## Choosing a Load/Save Mode
+
+Use the sequential mode unless you know the PLC driver and target PLC can handle concurrent requests.
+
+| Mode | Read | Save | When to use |
+| --- | --- | --- | --- |
+| Sequential | `LoadAllSequentialAsync()` | `SaveAllSequentialAsync()` | Default mode, predictable order, lowest pressure on PLC communication. |
+| Parallel | `LoadAllParallelAsync()` | `SaveAllParallelAsync()` | `net6.0+` only; useful when many properties can be processed concurrently. |
+| Tasks | `LoadAllTasksAsync()` | `SaveAllTasksAsync()` | Maximum task concurrency; use carefully with PLC request limits. |
+
 ## Supported Data Types
 
 `PLCDataContext` directly reads and writes the following types:
 
-| C# type   |      Default words | Notes                                                                                 |
-| --------- | -----------------: | ------------------------------------------------------------------------------------- |
-| `bool`    |                  1 | Uses `Read<bool>` and `Write<bool>`.                                                  |
-| `string`  | 1 if not specified | Declare `length` explicitly to define the buffer size. Each word stores 2 characters. |
-| `int`     |                  2 | Converted through 2 words using `BitConverter` little-endian layout.                  |
-| `float`   |                  2 | Read values are rounded to 2 decimal places.                                          |
-| `double`  |                  4 | Converted through 4 words.                                                            |
-| `decimal` |                  8 | Converted through 8 words.                                                            |
-| `short[]` |      From `length` | Raw word buffer.                                                                      |
+| C# type | Default words | Notes |
+| --- | ---: | --- |
+| `bool` | 1 | Uses `Read<bool>` and `Write<bool>`. |
+| `string` | 1 if not specified | Declare `length` explicitly to define the buffer size. Each word stores 2 characters. |
+| `int` | 2 | Converted through 2 words using `BitConverter` little-endian layout. |
+| `float` | 2 | Read values are rounded to 2 decimal places. |
+| `double` | 4 | Converted through 4 words. |
+| `decimal` | 8 | Converted through 8 words. |
+| `short[]` | From `length` | Raw word buffer. |
 
 `PLCTypeHelper` defines default lengths for additional types such as `short`, `long`, and other arrays, but `PLCDataContext.ReadValueAsync` and `WriteValueAsync` currently handle only the types listed above directly.
 
@@ -203,7 +219,6 @@ var subscription = data.WhenPropertyChanges<bool>(
         Console.WriteLine($"IsRunning = {isRunning}");
     });
 
-// Unsubscribe when it is no longer needed.
 subscription.Dispose();
 ```
 
@@ -241,17 +256,25 @@ data.WhenPropertyChangesDebounced<string>(
     });
 ```
 
+Expression-based overloads are also available:
+
+```csharp
+data.WhenPropertyChanges<string>(
+    x => ((MachineStatusData)x).ProductCode,
+    code => Console.WriteLine(code));
+```
+
 ## Extension Methods
 
 `PLCDataExtensions` provides helper methods for objects that inherit from `PLCDataContext`:
 
-| Method                       | Description                                                                                        |
-| ---------------------------- | -------------------------------------------------------------------------------------------------- |
-| `GetPLCProperties()`         | Gets properties with a `[PLCAddress]` attribute. Note: this method does not read runtime mappings. |
-| `CopyValuesFrom(source)`     | Copies values between two objects of the same type, based on attributed properties.                |
-| `ValuesEqual(other)`         | Compares values between two objects of the same type. Includes special handling for `short[]`.     |
-| `ExportToDictionary()`       | Exports values to a dictionary where keys are PLC addresses.                                       |
-| `ImportFromDictionary(data)` | Imports values from a dictionary where keys are PLC addresses.                                     |
+| Method | Description |
+| --- | --- |
+| `GetPLCProperties()` | Gets properties with a `[PLCAddress]` attribute. Note: this method does not read runtime mappings. |
+| `CopyValuesFrom(source)` | Copies values between two objects of the same type, based on attributed properties. |
+| `ValuesEqual(other)` | Compares values between two objects of the same type. Includes special handling for `short[]`. |
+| `ExportToDictionary()` | Exports values to a dictionary where keys are PLC addresses. |
+| `ImportFromDictionary(data)` | Imports values from a dictionary where keys are PLC addresses. |
 
 Example:
 
@@ -281,5 +304,6 @@ public class MachineStatusData : PLCDataContext
 - Each low-level read/write operation uses an internal `SemaphoreSlim` to lock access to `McpX`.
 - Addresses must start with a prefix defined in `McpXLib.Enums.Prefix`, such as `M` or `D`.
 - `ReadValueAsync(string)` returns the value only; it does not update the property on the object.
-- `SaveAsync()` writes all mapped properties except those marked `readOnly`.
+- All save methods write mapped properties except those marked `readOnly`.
+- `LoadAllParallelAsync()` and `SaveAllParallelAsync()` are compiled only for `net6.0` and later.
 - For `string` and `short[]`, declare `length` explicitly to avoid reading or writing incomplete data.
