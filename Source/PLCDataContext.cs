@@ -10,7 +10,7 @@ using System.Linq.Expressions;
 /// Base class providing automatic read/write mechanism for PLC data based on marked properties.
 /// Supports INotifyPropertyChanged for property change tracking.
 /// </summary>
-public abstract class PLCDataContext : INotifyPropertyChanged
+public abstract partial class PLCDataContext : INotifyPropertyChanged
 {
     [JsonIgnore]
     private McpX PlcDevice { get; set; }
@@ -83,6 +83,276 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         return (matchedPrefix, addressPart);
     }
 
+    /// <summary>
+    /// Reads all properties from PLC into the object.
+    /// Sequential version that reads properties one by one. Suitable for small number of properties or when order matters.
+    /// </summary>
+    public virtual async Task LoadAllSequentialAsync()
+    {
+        var properties = GetType().GetProperties().Where(p => GetPLCAddressInfo(p) != null);
+        foreach (var property in properties)
+            await LoadPropertyAsync(property);
+    }
+
+    /// <summary>
+    /// Reads all properties from PLC into the object in parallel.
+    /// Uses Parallel.ForEachAsync to read multiple properties concurrently, improving performance for large number of properties. Be cautious of PLC read limits and ensure thread safety in PLC access.
+    /// </summary>
+    /// <returns></returns>
+#if NET6_0_OR_GREATER
+    public virtual async Task LoadAllParallelAsync()
+    {
+        var properties = GetType().GetProperties().Where(p => GetPLCAddressInfo(p) != null);
+        await Parallel.ForEachAsync(properties, async (property, ct) => await LoadPropertyAsync(property));
+    }
+#endif
+
+    /// <summary>
+    /// Reads all properties from PLC into the object using Task.WhenAll for maximum concurrency.
+    /// </summary>
+    /// <returns></returns>
+    public virtual async Task LoadAllTasksAsync()
+    {
+        var properties = GetType().GetProperties().Where(p => GetPLCAddressInfo(p) != null);
+        var tasks = properties.Select(async property => await LoadPropertyAsync(property));
+        await Task.WhenAll(tasks);
+    }
+
+    /// <summary>
+    /// Writes all properties from object to PLC.
+    /// Supports dynamic JSON mapping or property attributes.
+    /// </summary>
+    public virtual async Task SaveAsync()
+    {
+        var properties = GetType().GetProperties()
+            .Where(p => GetPLCAddressInfo(p) != null && p.CanRead);
+
+        foreach (var property in properties)
+        {
+            try
+            {
+                var attr = GetPLCAddressInfo(property)!;
+                var value = property.GetValue(this);
+                await WriteValueAsync(property, attr, value);
+            }
+            catch (Exception ex)
+            {
+                Printt.Red(CustomMessage($"Error saving property {property.Name}: {ex.Message}"));
+                throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads a specific property from PLC.
+    /// </summary>
+    public async Task<object?> ReadValueAsync(string propertyName)
+    {
+        var property = GetType().GetProperty(propertyName);
+        if (property == null) return null;
+
+        var attr = GetPLCAddressInfo(property);
+        if (attr == null) return null;
+
+        return await ReadValueAsync(property, attr);
+    }
+
+    /// <summary>
+    /// Writes a specific property to PLC.
+    /// </summary>
+    public async Task WriteValueAsync(string propertyName, object? value)
+    {
+        var property = GetType().GetProperty(propertyName);
+        if (property == null) return;
+
+        var attr = GetPLCAddressInfo(property);
+        if (attr == null) return;
+
+        await WriteValueAsync(property, attr, value);
+    }
+
+    /// <summary>
+    /// Internal: Reads value from PLC based on data type.
+    /// </summary>
+    public async Task<object?> ReadValueAsync(PropertyInfo property, PLCAddressAttribute attr)
+    {
+        var propertyType = property.PropertyType;
+        var effectiveLength = PLCTypeHelper.GetEffectiveLength(property, attr);
+
+        if (propertyType == typeof(bool))
+        {
+            return await ReadBoolAsync(attr.Address);
+        }
+        else if (propertyType == typeof(string))
+        {
+            var words = await ReadWordsAsync(attr.Address, effectiveLength);
+            return WordsToString(words);
+        }
+        else if (propertyType == typeof(int))
+        {
+            var words = await ReadWordsAsync(attr.Address, effectiveLength);
+            if (words.Length >= 2)
+                return WordsToInt32(words[0], words[1]);
+            return 0;
+        }
+        else if (propertyType == typeof(float))
+        {
+            var words = await ReadWordsAsync(attr.Address, effectiveLength);
+            if (words.Length >= 2)
+                return WordsToFloat(words[0], words[1]);
+            return 0f;
+        }
+        else if (propertyType == typeof(double))
+        {
+            var words = await ReadWordsAsync(attr.Address, effectiveLength);
+            if (words.Length >= 4)
+                return WordsToDouble(words);
+            return 0d;
+        }
+        else if (propertyType == typeof(decimal))
+        {
+            var words = await ReadWordsAsync(attr.Address, effectiveLength);
+            if (words.Length >= 8)
+                return WordsToDecimal(words);
+            return 0m;
+        }
+        else if (propertyType == typeof(short[]))
+        {
+            return await ReadWordsAsync(attr.Address, effectiveLength);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Internal: Writes value to PLC based on data type.
+    /// </summary>
+    public async Task WriteValueAsync(PropertyInfo property, PLCAddressAttribute attr, object? value)
+    {
+        if (attr.ReadOnly) return; // Skip read-only properties
+        var propertyType = property.PropertyType;
+        var effectiveLength = PLCTypeHelper.GetEffectiveLength(property, attr);
+
+        if (propertyType == typeof(bool) && value is bool boolValue)
+        {
+            await WriteBoolAsync(attr.Address, boolValue);
+        }
+        else if (propertyType == typeof(string) && value is string strValue)
+        {
+            var words = StringToWords(strValue, effectiveLength);
+            await WriteWordsAsync(attr.Address, words);
+        }
+        else if (propertyType == typeof(int) && value is int intValue)
+        {
+            var words = Int32ToWords(intValue);
+            await WriteWordsAsync(attr.Address, words);
+        }
+        // numeric types: float (2 words), double (4 words), decimal (8 words)
+        else if (propertyType == typeof(float) && value is float floatValue)
+        {
+            var words = FloatToWords(floatValue);
+            await WriteWordsAsync(attr.Address, words);
+        }
+        else if (propertyType == typeof(double) && value is double doubleValue)
+        {
+            var words = DoubleToWords(doubleValue);
+            await WriteWordsAsync(attr.Address, words);
+        }
+        else if (propertyType == typeof(decimal) && value is decimal decimalValue)
+        {
+            var words = DecimalToWords(decimalValue);
+            await WriteWordsAsync(attr.Address, words);
+        }
+        else if (propertyType == typeof(short[]) && value is short[] arrValue)
+        {
+            await WriteWordsAsync(attr.Address, arrValue);
+        }
+    }
+
+    public string ToJsonString() => JsonConvert.SerializeObject(this);
+
+    #region ==================== HELPERS ====================
+
+    private async Task LoadPropertyAsync(PropertyInfo property)
+    {
+        try
+        {
+            var attr = GetPLCAddressInfo(property)!;
+            var value = await ReadValueAsync(property, attr);
+            SetPropertyValue(property, value);
+        }
+        catch (Exception ex)
+        {
+            Printt.Red(CustomMessage($"Error loading property {property.Name}: {ex.Message}"));
+            throw;
+        }
+    }
+
+    private static string ExtractPropertyName<T>(
+        Expression<Func<PLCDataContext, T>> expression)
+    {
+        var names = new Stack<string>();
+        Expression? current = expression.Body;
+
+        while (current is MemberExpression member)
+        {
+            names.Push(member.Member.Name);
+            current = member.Expression;
+        }
+
+        return string.Join(".", names);
+    }
+
+    /// <summary>
+    /// Raises PropertyChanged event when property changes.
+    /// Used by derived classes to notify that a property has changed.
+    /// </summary>
+    protected void OnPropertyChanged(string propertyName)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
+
+    /// <summary>
+    /// Raises PropertyValueChanged event with old and new values.
+    /// Used by derived classes to notify changes with old and new values.
+    /// </summary>
+    protected void OnPropertyValueChanged(string propertyName, object? oldValue, object? newValue)
+    {
+        PropertyValueChanged?.Invoke(propertyName, oldValue, newValue);
+    }
+
+    /// <summary>
+    /// Helper method to set property value and raise events.
+    /// </summary>
+    private void SetPropertyValue(PropertyInfo property, object? newValue)
+    {
+        var oldValue = property.GetValue(this);
+        if (ValuesAreEqual(oldValue, newValue)) return;
+
+        property.SetValue(this, newValue);
+
+        // Raise events
+        OnPropertyChanged(property.Name);
+        OnPropertyValueChanged(property.Name, oldValue, newValue);
+        Printt.Default(CustomMessage($"[CHANGE] {GetType().Name}.{property.Name}: {oldValue} → {newValue}"));
+    }
+
+    private static bool ValuesAreEqual(object? oldValue, object? newValue)
+    {
+        if (oldValue is short[] oldArray && newValue is short[] newArray)
+            return oldArray.SequenceEqual(newArray);
+
+        return Equals(oldValue, newValue);
+    }
+
+    #endregion
+}
+
+/// <summary>
+/// Low-level PLC read/write operations based on data type and address parsing.
+/// </summary>
+public abstract partial class PLCDataContext
+{
     /// <summary>
     /// Reads a bool value from the PLC.
     /// </summary>
@@ -293,283 +563,42 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         var bytes = BitConverter.GetBytes(value);
         return new short[] { BitConverter.ToInt16(bytes, 0), BitConverter.ToInt16(bytes, 2) };
     }
+}
 
-    /// <summary>
-    /// Reads all properties from PLC into the object.
-    /// Supports dynamic JSON mapping or property attributes.
-    /// </summary>
-    public virtual async Task LoadAsync()
-    {
-        var properties = GetType().GetProperties()
-            .Where(p => GetPLCAddressInfo(p) != null);
-
-        foreach (var property in properties)
-        {
-            try
-            {
-                var attr = GetPLCAddressInfo(property)!;
-                var value = await ReadValueAsync(property, attr);
-                SetPropertyValue(property, value);
-            }
-            catch (Exception ex)
-            {
-                Printt.Red(CustomMessage($"Error loading property {property.Name}: {ex.Message}"));
-                throw;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Writes all properties from object to PLC.
-    /// Supports dynamic JSON mapping or property attributes.
-    /// </summary>
-    public virtual async Task SaveAsync()
-    {
-        var properties = GetType().GetProperties()
-            .Where(p => GetPLCAddressInfo(p) != null && p.CanRead);
-
-        foreach (var property in properties)
-        {
-            try
-            {
-                var attr = GetPLCAddressInfo(property)!;
-                var value = property.GetValue(this);
-                await WriteValueAsync(property, attr, value);
-            }
-            catch (Exception ex)
-            {
-                Printt.Red(CustomMessage($"Error saving property {property.Name}: {ex.Message}"));
-                throw;
-            }
-        }
-    }
-
-    #region ==================== REACTIVE POLLING (Change Detection) ====================
-
-    /// <summary>
-    /// **CORE INDUSTRIAL GATEWAY METHOD**
-    /// 
-    /// Chỉ đọc và phát hiện các property thay đổi từ PLC, thay vì load tất cả như LoadAsync()
-    /// - Giảm 95% read operations không cần thiết
-    /// - Chỉ trigger events khi dữ liệu thực sự thay đổi
-    /// - Tối ưu hóa cho polling loop (chạy mỗi 50ms thay vì 1s)
-    /// 
-    /// Architecture:
-    /// Polling Engine (50ms) → Change Detection → Event Bus → Business Handlers
-    /// 
-    /// Thay vì: while(true) { LoadAsync(); CheckConditions(); }
-    /// Thành:   while(true) { PollChangesAsync(); } (business logic qua events)
-    /// </summary>
-    public virtual async Task PollChangesAsync()
-    {
-        var properties = GetType().GetProperties()
-            .Where(p => GetPLCAddressInfo(p) != null);
-
-        foreach (var property in properties)
-        {
-            try
-            {
-                var attr = GetPLCAddressInfo(property)!;
-                var oldValue = property.GetValue(this);
-                var newValue = await ReadValueAsync(property, attr);
-
-                // ONLY update if there's a change
-                if (!Equals(oldValue, newValue))
-                {
-                    property.SetValue(this, newValue);
-                    OnPropertyChanged(property.Name);
-                    OnPropertyValueChanged(property.Name, oldValue, newValue);
-
-                    Printt.Default(CustomMessage($"[CHANGE] {GetType().Name}.{property.Name}: {oldValue} → {newValue}"));
-                }
-            }
-            catch (Exception ex)
-            {
-                Printt.Red(CustomMessage($"Error polling property {property.Name}: {ex.Message}"));
-                throw;
-            }
-        }
-    }
-
-    #endregion
-
-    /// <summary>
-    /// Reads a specific property from PLC.
-    /// </summary>
-    public async Task<object?> ReadValueAsync(string propertyName)
-    {
-        var property = GetType().GetProperty(propertyName);
-        if (property == null) return null;
-
-        var attr = GetPLCAddressInfo(property);
-        if (attr == null) return null;
-
-        return await ReadValueAsync(property, attr);
-    }
-
-    /// <summary>
-    /// Writes a specific property to PLC.
-    /// </summary>
-    public async Task WriteValueAsync(string propertyName, object? value)
-    {
-        var property = GetType().GetProperty(propertyName);
-        if (property == null) return;
-
-        var attr = GetPLCAddressInfo(property);
-        if (attr == null) return;
-
-        await WriteValueAsync(property, attr, value);
-    }
-
-    /// <summary>
-    /// Internal: Reads value from PLC based on data type.
-    /// </summary>
-    public async Task<object?> ReadValueAsync(PropertyInfo property, PLCAddressAttribute attr)
-    {
-        var propertyType = property.PropertyType;
-        var effectiveLength = PLCTypeHelper.GetEffectiveLength(property, attr);
-
-        if (propertyType == typeof(bool))
-        {
-            return await ReadBoolAsync(attr.Address);
-        }
-        else if (propertyType == typeof(string))
-        {
-            var words = await ReadWordsAsync(attr.Address, effectiveLength);
-            return WordsToString(words);
-        }
-        else if (propertyType == typeof(int))
-        {
-            var words = await ReadWordsAsync(attr.Address, effectiveLength);
-            if (words.Length >= 2)
-                return WordsToInt32(words[0], words[1]);
-            return 0;
-        }
-        else if (propertyType == typeof(float))
-        {
-            var words = await ReadWordsAsync(attr.Address, effectiveLength);
-            if (words.Length >= 2)
-                return WordsToFloat(words[0], words[1]);
-            return 0f;
-        }
-        else if (propertyType == typeof(double))
-        {
-            var words = await ReadWordsAsync(attr.Address, effectiveLength);
-            if (words.Length >= 4)
-                return WordsToDouble(words);
-            return 0d;
-        }
-        else if (propertyType == typeof(decimal))
-        {
-            var words = await ReadWordsAsync(attr.Address, effectiveLength);
-            if (words.Length >= 8)
-                return WordsToDecimal(words);
-            return 0m;
-        }
-        else if (propertyType == typeof(short[]))
-        {
-            return await ReadWordsAsync(attr.Address, effectiveLength);
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Internal: Writes value to PLC based on data type.
-    /// </summary>
-    public async Task WriteValueAsync(PropertyInfo property, PLCAddressAttribute attr, object? value)
-    {
-        if (attr.ReadOnly) return; // Skip read-only properties
-        var propertyType = property.PropertyType;
-        var effectiveLength = PLCTypeHelper.GetEffectiveLength(property, attr);
-
-        if (propertyType == typeof(bool) && value is bool boolValue)
-        {
-            await WriteBoolAsync(attr.Address, boolValue);
-        }
-        else if (propertyType == typeof(string) && value is string strValue)
-        {
-            var words = StringToWords(strValue, effectiveLength);
-            await WriteWordsAsync(attr.Address, words);
-        }
-        else if (propertyType == typeof(int) && value is int intValue)
-        {
-            var words = Int32ToWords(intValue);
-            await WriteWordsAsync(attr.Address, words);
-        }
-        // numeric types: float (2 words), double (4 words), decimal (8 words)
-        else if (propertyType == typeof(float) && value is float floatValue)
-        {
-            var words = FloatToWords(floatValue);
-            await WriteWordsAsync(attr.Address, words);
-        }
-        else if (propertyType == typeof(double) && value is double doubleValue)
-        {
-            var words = DoubleToWords(doubleValue);
-            await WriteWordsAsync(attr.Address, words);
-        }
-        else if (propertyType == typeof(decimal) && value is decimal decimalValue)
-        {
-            var words = DecimalToWords(decimalValue);
-            await WriteWordsAsync(attr.Address, words);
-        }
-        else if (propertyType == typeof(short[]) && value is short[] arrValue)
-        {
-            await WriteWordsAsync(attr.Address, arrValue);
-        }
-    }
-
-    public string ToJsonString() => JsonConvert.SerializeObject(this);
-
-    #region ==================== PROPERTY TRACKING SUBSCRIPTIONS ====================
-
-    // ---------- STRING BASED ----------
-
-    public IDisposable WhenPropertyChanges(
-        string propertyName,
-        Action<object?> onChanged)
+/// <summary>
+/// Provides methods to subscribe to property changes with various signatures (sync/async, with/without old value).
+/// </summary>
+public abstract partial class PLCDataContext
+{
+    public IDisposable WhenPropertyChanges(string propertyName, Action<object?> onChanged)
     {
         return SubscribePropertyChanged(
             propertyName,
             value => onChanged?.Invoke(value));
     }
 
-    public IDisposable WhenPropertyChanges<T>(
-        string propertyName,
-        Action<T> onChanged)
+    public IDisposable WhenPropertyChanges<T>(string propertyName, Action<T> onChanged)
     {
         return SubscribePropertyChanged(
             propertyName,
-            value =>
-            {
-                if (value is T typed) onChanged?.Invoke(typed);
-            });
+            value => { if (value is T typed) onChanged?.Invoke(typed); });
     }
 
-    public IDisposable WhenPropertyChanges<T>(
-        string propertyName,
-        Func<T, Task> onChanged)
+    public IDisposable WhenPropertyChanges<T>(string propertyName, Func<T, Task> onChanged)
     {
         return SubscribePropertyChanged(
             propertyName,
-            async value =>
-            {
-                if (value is T typed) await onChanged(typed);
-            });
+            async value => { if (value is T typed) await onChanged(typed); });
     }
 
-    public IDisposable WhenPropertyChanges(
-        string propertyName,
-        Action<object?, object?> onChanged)
+    public IDisposable WhenPropertyChanges(string propertyName, Action<object?, object?> onChanged)
     {
         return SubscribePropertyChanged(
             propertyName,
             (oldValue, newValue) => onChanged?.Invoke(oldValue, newValue));
     }
 
-    public IDisposable WhenPropertyChanges<T>(
-        string propertyName,
-        Action<T, T> onChanged)
+    public IDisposable WhenPropertyChanges<T>(string propertyName, Action<T, T> onChanged)
     {
         return SubscribePropertyChanged(
             propertyName,
@@ -580,9 +609,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
             });
     }
 
-    public IDisposable WhenPropertyChanges<T>(
-        string propertyName,
-        Func<T, T, Task> onChanged)
+    public IDisposable WhenPropertyChanges<T>(string propertyName, Func<T, T, Task> onChanged)
     {
         return SubscribePropertyChanged(
             propertyName,
@@ -595,35 +622,25 @@ public abstract class PLCDataContext : INotifyPropertyChanged
 
     // ---------- EXPRESSION BASED ----------
 
-    public IDisposable WhenPropertyChanges<T>(
-        Expression<Func<PLCDataContext, T>> selector,
-        Action<T> onChanged)
+    public IDisposable WhenPropertyChanges<T>(Expression<Func<PLCDataContext, T>> selector, Action<T> onChanged)
     {
         return WhenPropertyChanges(ExtractPropertyName(selector), onChanged);
     }
 
-    public IDisposable WhenPropertyChanges<T>(
-        Expression<Func<PLCDataContext, T>> selector,
-        Func<T, Task> onChanged)
+    public IDisposable WhenPropertyChanges<T>(Expression<Func<PLCDataContext, T>> selector, Func<T, Task> onChanged)
     {
         return WhenPropertyChanges(ExtractPropertyName(selector), onChanged);
     }
 
-    public IDisposable WhenPropertyChanges<T>(
-        Expression<Func<PLCDataContext, T>> selector,
-        Action<T, T> onChanged)
+    public IDisposable WhenPropertyChanges<T>(Expression<Func<PLCDataContext, T>> selector, Action<T, T> onChanged)
     {
         return WhenPropertyChanges(ExtractPropertyName(selector), onChanged);
     }
 
-    public IDisposable WhenPropertyChanges<T>(
-        Expression<Func<PLCDataContext, T>> selector,
-        Func<T, T, Task> onChanged)
+    public IDisposable WhenPropertyChanges<T>(Expression<Func<PLCDataContext, T>> selector, Func<T, T, Task> onChanged)
     {
         return WhenPropertyChanges(ExtractPropertyName(selector), onChanged);
     }
-
-    #endregion
 
     /// <summary>
     /// **ANTI-SPAM PATTERN**
@@ -639,10 +656,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
     ///     async (qr) => await HandleScanQRAsync(qr));
     /// ```
     /// </summary>
-    public IDisposable WhenPropertyChangesDebounced<T>(
-        string propertyName,
-        int debounceMs,
-        Func<T, Task> handler)
+    public IDisposable WhenPropertyChangesDebounced<T>(string propertyName, int debounceMs, Func<T, Task> handler)
     {
         CancellationTokenSource? cts = null;
         var property = GetType().GetProperty(propertyName);
@@ -675,10 +689,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
     /// <summary>
     /// Debounced property change detection with old/new values.
     /// </summary>
-    public IDisposable WhenPropertyChangesDebounced<T>(
-        string propertyName,
-        int debounceMs,
-        Func<T, T, Task> handler)
+    public IDisposable WhenPropertyChangesDebounced<T>(string propertyName, int debounceMs, Func<T, T, Task> handler)
     {
         CancellationTokenSource? cts = null;
 
@@ -700,30 +711,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
             });
     }
 
-    /// <summary>
-    /// **STRING CHANGE PATTERN WITH DEBOUNCE**
-    /// 
-    /// Dedicated for QR code scanning or text input.
-    /// - Skips empty/whitespace changes
-    /// - Auto debounce
-    /// </summary>
-    public IDisposable WhenNonEmptyStringChanges(
-        string propertyName,
-        int debounceMs,
-        Func<string, Task> handler)
-    {
-        return WhenPropertyChangesDebounced<string>(
-            propertyName,
-            debounceMs,
-            async (newVal) => { if (!string.IsNullOrWhiteSpace(newVal)) await handler(newVal); }
-        );
-    }
-
-    #region ==================== CORE SUBSCRIPTIONS ====================
-
-    private IDisposable SubscribePropertyChanged(
-        string propertyName,
-        Action<object?> handler)
+    private IDisposable SubscribePropertyChanged(string propertyName, Action<object?> handler)
     {
         var property = GetType().GetProperty(propertyName);
 
@@ -737,9 +725,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         return new PropertyChangeSubscription(() => PropertyChanged -= eventHandler);
     }
 
-    private IDisposable SubscribePropertyChanged(
-        string propertyName,
-        Func<object?, Task> handler)
+    private IDisposable SubscribePropertyChanged(string propertyName, Func<object?, Task> handler)
     {
         var property = GetType().GetProperty(propertyName);
 
@@ -753,9 +739,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         return new PropertyChangeSubscription(() => PropertyChanged -= eventHandler);
     }
 
-    private IDisposable SubscribePropertyChanged(
-        string propertyName,
-        Action<object?, object?> handler)
+    private IDisposable SubscribePropertyChanged(string propertyName, Action<object?, object?> handler)
     {
         Action<string, object?, object?> eventHandler =
             (name, oldValue, newValue) =>
@@ -768,9 +752,7 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         return new PropertyChangeSubscription(() => PropertyValueChanged -= eventHandler);
     }
 
-    private IDisposable SubscribePropertyChanged(
-        string propertyName,
-        Func<object?, object?, Task> handler)
+    private IDisposable SubscribePropertyChanged(string propertyName, Func<object?, object?, Task> handler)
     {
         Action<string, object?, object?> eventHandler =
             async (name, oldValue, newValue) =>
@@ -782,58 +764,6 @@ public abstract class PLCDataContext : INotifyPropertyChanged
         PropertyValueChanged += eventHandler;
         return new PropertyChangeSubscription(() => PropertyValueChanged -= eventHandler);
     }
-
-    #endregion
-
-    #region ==================== HELPERS ====================
-
-    private static string ExtractPropertyName<T>(
-        Expression<Func<PLCDataContext, T>> expression)
-    {
-        var names = new Stack<string>();
-        Expression? current = expression.Body;
-
-        while (current is MemberExpression member)
-        {
-            names.Push(member.Member.Name);
-            current = member.Expression;
-        }
-
-        return string.Join(".", names);
-    }
-
-    /// <summary>
-    /// Raises PropertyChanged event when property changes.
-    /// Used by derived classes to notify that a property has changed.
-    /// </summary>
-    protected void OnPropertyChanged(string propertyName)
-    {
-        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-    }
-
-    /// <summary>
-    /// Raises PropertyValueChanged event with old and new values.
-    /// Used by derived classes to notify changes with old and new values.
-    /// </summary>
-    protected void OnPropertyValueChanged(string propertyName, object? oldValue, object? newValue)
-    {
-        PropertyValueChanged?.Invoke(propertyName, oldValue, newValue);
-    }
-
-    /// <summary>
-    /// Helper method to set property value and raise events.
-    /// </summary>
-    private void SetPropertyValue(PropertyInfo property, object? newValue)
-    {
-        var oldValue = property.GetValue(this);
-        property.SetValue(this, newValue);
-
-        // Raise events
-        OnPropertyChanged(property.Name);
-        OnPropertyValueChanged(property.Name, oldValue, newValue);
-    }
-
-    #endregion
 }
 
 /// <summary>

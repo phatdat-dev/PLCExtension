@@ -1,665 +1,285 @@
-# PLC Data Context - PLC Data Access/Update Mechanism
+# Language
 
-## Introduction
+[Vietnamese](README-VI.md) | [English](README.md)
 
-This mechanism provides an **easy, type-safe, and clean** way to work with PLC data instead of managing addresses manually.
+# PLCExtension
 
-### What's New
+`PLCExtension` is a .NET library that maps PLC data to strongly typed C# properties. Instead of manually reading and writing individual PLC addresses, define a class that inherits from `PLCDataContext`, map properties with `[PLCAddress]` or runtime mappings, then load and save data through the object.
 
-Instead of manually managing PLC addresses, the new mechanism provides:
+The package supports `netstandard2.0`, `net6.0`, `net7.0`, `net8.0`, `net9.0`, and `net10.0`. PLC communication is handled through `McpX`.
 
-- **Property-based access** - Access data like normal properties
-- **Type-safe** - Automatic IntelliSense completion
-- **Auto conversion** - Automatic data type conversion
-- **Clean code** - Reduces complexity and potential errors
+## Installation
 
-```csharp
-var qrData = new QRScanData1(_plc);
-await qrData.LoadAsync();
-
-if (qrData.IsLocked)
-{
-    qrData.ClearCommand = true;
-    qrData.RollID = rollId; // Automatically converted
-    await qrData.SaveAsync();
-}
+```bash
+dotnet add package PLCExtension
 ```
 
-## How It Works
-
-### Method 1: Using Attributes (Traditional)
-
-#### 1. Define Data Class
+## Quick Start
 
 ```csharp
+using McpXLib;
+
 public class QRScanData : PLCDataContext
 {
-    public QRScanData(McpX plcDevice) : base(plcDevice) { }
-    // Attribute specifies PLC address
-    [PLCAddress("M6011", description: "QR Scan Command")]
+    public QRScanData(McpX plc) : base(plc) { }
+
+    [PLCAddress("M6011", description: "QR scan command")]
     public bool ScanCommand { get; set; }
 
-    [PLCAddress("M6012", description: "OK Status")]
+    [PLCAddress("M6012", description: "OK status")]
     public bool OkStatus { get; set; }
 
-    [PLCAddress("D6200", length: 100, description: "QR Buffer")]
+    [PLCAddress("D6200", length: 100, description: "QR buffer")]
     public string QRBarcode { get; set; } = "";
 
-    [PLCAddress("D6300", length: 2, description: "Speed")]
+    [PLCAddress("D6300", description: "Speed")]
     public int RollSpeed { get; set; }
 
-    [PLCAddress("D6310", length: 2, description: "Length")]
+    [PLCAddress("D6310", description: "Length")]
     public float RollLength { get; set; }
 }
 ```
 
-#### 2. Usage
+Usage:
 
 ```csharp
-// Initialize object with PLC device
-var data = new QRScanData(_plc);
+var data = new QRScanData(plc);
 
-// FIRST, read ALL from PLC into object
-await data.LoadAsync();
+await data.LoadAllSequentialAsync();
 
-// Now can access properties normally
-bool isOk = data.OkStatus;
-string barcode = data.QRBarcode;
+if (data.ScanCommand)
+{
+    data.OkStatus = true;
+    data.RollSpeed = 500;
+    data.RollLength = 120.5f;
 
-// Modify data
-data.OkStatus = true;
-data.RollSpeed = 500;
-data.RollLength = 1000.5f;
-
-// WRITE ALL changes back to PLC
-await data.SaveAsync();
+    await data.SaveAsync();
+}
 ```
 
-### Method 2: Using Dynamic JSON Mapping (Advanced)
+## How PLCDataContext Works
 
-#### 1. Prepare JSON File
+`PLCDataContext` finds properties that have PLC address metadata, reads the corresponding data from the PLC, converts it to the matching C# type, and sets the value on the object. When writing, it takes the current property value, converts it to the required bit/word representation, and writes it back to the PLC.
 
-Create `mapping.json` with format:
+PLC address metadata can come from:
+
+- A `[PLCAddress]` attribute directly on the property.
+- A dictionary passed to `PLCDataContext(McpX, Dictionary<string, PLCAddressAttribute>)`.
+
+If a property has both an attribute and a runtime mapping, the runtime mapping takes priority. Missing runtime mapping fields fall back to the attribute when available.
+
+## Attribute-Based Mapping
+
+```csharp
+public class MachineStatusData : PLCDataContext
+{
+    public MachineStatusData(McpX plc) : base(plc) { }
+
+    [PLCAddress("M100", description: "Machine is running")]
+    public bool IsRunning { get; set; }
+
+    [PLCAddress("D200", length: 20, description: "Product code")]
+    public string ProductCode { get; set; } = "";
+
+    [PLCAddress("D230", readOnly: true, description: "Read-only counter")]
+    public int TotalCounter { get; set; }
+}
+```
+
+Attribute parameters:
+
+| Parameter     | Description                                                                                         |
+| ------------- | --------------------------------------------------------------------------------------------------- |
+| `address`     | PLC address, for example `M100` or `D200`. The first character is parsed as `McpXLib.Enums.Prefix`. |
+| `length`      | Number of words to read/write. If `0`, the library calculates the length from the property type.    |
+| `description` | Optional description for documenting the mapping.                                                   |
+| `readOnly`    | If `true`, `SaveAsync()` and `WriteValueAsync()` skip this property when writing.                   |
+
+## Runtime Mapping
+
+Use runtime mapping when PLC addresses need to be configured outside the codebase or vary by machine, line, or PLC version.
+
+```csharp
+public class MachineStatusData : PLCDataContext
+{
+    public MachineStatusData(McpX plc, Dictionary<string, PLCAddressAttribute> mapping)
+        : base(plc, mapping) { }
+
+    public bool IsRunning { get; set; }
+    public string ProductCode { get; set; } = "";
+    public int TotalCounter { get; set; }
+}
+```
+
+Example `mapping.json`:
 
 ```json
 {
-  "ScanCommand": {
-    "address": "M6011",
-    "length": 1,
-    "description": "QR Scan Command"
+  "IsRunning": {
+    "Address": "M100",
+    "Length": 0,
+    "Description": "Machine is running",
+    "ReadOnly": false
   },
-  "OkStatus": {
-    "address": "M6012",
-    "length": 1,
-    "description": "OK Status"
+  "ProductCode": {
+    "Address": "D200",
+    "Length": 20,
+    "Description": "Product code",
+    "ReadOnly": false
+  },
+  "TotalCounter": {
+    "Address": "D230",
+    "Length": 0,
+    "Description": "Read-only counter",
+    "ReadOnly": true
   }
 }
 ```
 
-#### 2. Define Data Class (No Attributes Needed)
+Load the mapping:
 
 ```csharp
-public class SendRollMES : PLCDataContext
-{
-    public SendRollMES(McpX plcDevice) : base(plcDevice) { }
-    public SendRollMES(McpX plcDevice, Dictionary<string, PLCAddressAttribute> mappings) : base(plcDevice, mappings) { }
+using Newtonsoft.Json;
 
-    // Declare properties WITHOUT [PLCAddress] attribute
-    public bool ScanCommand { get; set; }
-    public bool OkStatus { get; set; }
-    public string QRBarcode { get; set; } = "";
-    public int RollSpeed { get; set; }
-    public float RollLength { get; set; }
-}
-```
-
-#### 3. Usage With JSON Mapping
-
-```csharp
-// Read JSON file
 var json = File.ReadAllText("mapping.json");
+var mapping = JsonConvert.DeserializeObject<Dictionary<string, PLCAddressAttribute>>(json)
+              ?? new Dictionary<string, PLCAddressAttribute>();
 
-// Deserialize into List<PLCAddressAttribute>
-var fieldMapList = JsonSerializer.Deserialize<Dictionary<string, PLCAddressAttribute>>(json);
-
-// Initialize object with mapping
-var context = new SendRollMES(_plc, fieldMapList);
-
-// Read from PLC (using JSON mapping)
-await context.LoadAsync();
-
-// Process data
-if (context.ScanCommand)
-{
-    context.OkStatus = true;
-    context.RollSpeed = 1000;
-    context.RollLength = 500.5f;
-}
-
-// Write back to PLC
-await context.SaveAsync();
+var data = new MachineStatusData(plc, mapping);
+await data.LoadAllSequentialAsync();
 ```
 
-#### 4. Benefits of JSON Mapping
+## Read and Write API
 
-- **Customize addresses without recompile** - Just update mapping.json
-- **Easy config management** - Can be stored outside codebase
-- **Support multiple versions** - Can have mapping.v1.json, mapping.v2.json
-- **Easy testing** - Mock mapping for unit tests
-- **Easy maintenance** - Single place to manage all PLC addresses
+| Method                                                | Description                                                                                                           |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `LoadAllSequentialAsync()`                            | Reads all mapped properties one by one. This is the safest default option.                                            |
+| `LoadAllParallelAsync()`                              | Reads all mapped properties with `Parallel.ForEachAsync`. Use when the PLC/driver can handle concurrent requests.     |
+| `LoadAllTasksAsync()`                                 | Creates one task per mapped property and waits with `Task.WhenAll`. This is the highest-concurrency load mode.        |
+| `SaveAsync()`                                         | Writes all mapped readable properties. Properties marked `readOnly` are skipped.                                      |
+| `ReadValueAsync(string propertyName)`                 | Reads one property from the PLC and returns the value. It does not set the value on the object.                       |
+| `WriteValueAsync(string propertyName, object? value)` | Writes a value to the PLC address mapped to the property.                                                             |
+| `ToJsonString()`                                      | Serializes the current object with `Newtonsoft.Json`. Internal fields such as the PLC device and mapping are ignored. |
+
+Read or write a single property:
+
+```csharp
+var current = await data.ReadValueAsync(nameof(MachineStatusData.TotalCounter));
+await data.WriteValueAsync(nameof(MachineStatusData.ProductCode), "ROLL-001");
+```
 
 ## Supported Data Types
 
-| Type      | Words Used | Example Address |
-| --------- | ---------- | --------------- |
-| `bool`    | 1          | `M3800`         |
-| `string`  | Length     | `D6200`         |
-| `int`     | 2          | `D6100`         |
-| `float`   | 2          | `D6310`         |
-| `short[]` | Length     | `D6000`         |
+`PLCDataContext` directly reads and writes the following types:
 
-### Automatic Type Conversion
+| C# type   |      Default words | Notes                                                                                 |
+| --------- | -----------------: | ------------------------------------------------------------------------------------- |
+| `bool`    |                  1 | Uses `Read<bool>` and `Write<bool>`.                                                  |
+| `string`  | 1 if not specified | Declare `length` explicitly to define the buffer size. Each word stores 2 characters. |
+| `int`     |                  2 | Converted through 2 words using `BitConverter` little-endian layout.                  |
+| `float`   |                  2 | Read values are rounded to 2 decimal places.                                          |
+| `double`  |                  4 | Converted through 4 words.                                                            |
+| `decimal` |                  8 | Converted through 8 words.                                                            |
+| `short[]` |      From `length` | Raw word buffer.                                                                      |
 
-```csharp
-// String (uses multiple Words)
-[PLCAddress("D6200", length: 100)]
-public string QRCode { get; set; } = "";
-
-// Int32 (uses 2 Words)
-[PLCAddress("D6300", length: 2)]
-public int Speed { get; set; }
-
-// Float (uses 2 Words)
-[PLCAddress("D6310", length: 2)]
-public float Length { get; set; }
-
-// Boolean (uses 1 Word from M register)
-[PLCAddress("M6000")]
-public bool IsRunning { get; set; }
-
-// Raw Word Array
-[PLCAddress("D6000", length: 10)]
-public short[] RawData { get; set; } = Array.Empty<short>();
-```
-
-## Detailed API
-
-### Main Methods
-
-```csharp
-// Read ALL from PLC into object (supports attributes or JSON mapping)
-await data.LoadAsync();
-
-// Write ALL from object to PLC (supports attributes or JSON mapping)
-await data.SaveAsync();
-
-// Read specific property from PLC
-var value = await data.ReadValueAsync("PropertyName");
-
-// Write specific property to PLC
-await data.WriteValueAsync("PropertyName", value);
-```
-
-### Extension Methods (Utilities)
-
-```csharp
-// Get list of all PLC properties
-var props = data.GetPLCProperties();
-// Output: List<(PropertyInfo, PLCAddressAttribute)>
-
-// Print detailed mapping
-Console.WriteLine(data.GetPLCMapping());
-
-// Clone data from another object
-data.CopyValuesFrom(otherData);
-
-// Compare with another object
-bool isEqual = data.ValuesEqual(otherData);
-
-// Export to Dictionary (easy serialize)
-var dict = data.ExportToDictionary();
-
-// Import from Dictionary
-data.ImportFromDictionary(dict);
-```
+`PLCTypeHelper` defines default lengths for additional types such as `short`, `long`, and other arrays, but `PLCDataContext.ReadValueAsync` and `WriteValueAsync` currently handle only the types listed above directly.
 
 ## Property Change Tracking
 
-PLCDataContext supports **INotifyPropertyChanged** for easy property change tracking. There are 3 ways to use it:
+`PLCDataContext` implements `INotifyPropertyChanged`. When `LoadAllSequentialAsync()`, `LoadAllParallelAsync()`, or `LoadAllTasksAsync()` reads a value that differs from the current property value, the object will:
 
-### Method 1: Using WhenPropertyChanges (Easiest)
+- Set the new property value.
+- Raise `PropertyChanged`.
+- Raise `PropertyValueChanged` with `oldValue` and `newValue`.
+- Print a log in the format `[CHANGE] Class.Property: old -> new`.
 
-This method is easiest and suitable for most use cases:
-
-#### String Version (Basic)
+Subscribe by property name:
 
 ```csharp
-var scanRoll = new HMIScanRollScreenData(_plc);
-
-// Subscribe to property changes
-var subscription = scanRoll.WhenPropertyChanges<bool>("ConfirmSubRollButton", (newValue) =>
-{
-    _logger.LogInformation($"ConfirmSubRollButton changed to: {newValue}");
-    if (newValue)
+var subscription = data.WhenPropertyChanges<bool>(
+    nameof(MachineStatusData.IsRunning),
+    isRunning =>
     {
-        // Handle button confirm
-    }
-});
+        Console.WriteLine($"IsRunning = {isRunning}");
+    });
 
-// When no longer needed, unsubscribe
+// Unsubscribe when it is no longer needed.
 subscription.Dispose();
 ```
 
-#### Lambda Expression Version (Type-Safe - Recommended)
-
-Use **extension method** - `x` will be type-inferred, IntelliSense works great:
+Subscribe with old/new values:
 
 ```csharp
-var scanRoll = new HMIScanRollScreenData(_plc);
-
-// Subscribe with lambda expression - x is HMIScanRollScreenData, IntelliSense support!
-var subscription = scanRoll.WhenPropertyChanges(
-    x => x.ConfirmSubRollButton,  // ← x. shows all properties
-    (newValue) =>
-    {
-        _logger.LogInformation($"ConfirmSubRollButton changed to: {newValue}");
-        if (newValue)
-        {
-            // Handle button confirm
-        }
-    }
-);
-
-// With async callback:
-var asyncSubscription = scanRoll.WhenPropertyChanges(
-    x => x.ConfirmSubRollButton,
-    async (newValue) =>  // ← Receives parameter value
-    {
-        _logger.LogInformation($"ConfirmSubRollButton changed to: {newValue}");
-        if (newValue)
-        {
-            // Async operations
-            await ProcessSubRollConfirmAsync();
-        }
-    }
-);
-
-// Nested properties also supported:
-var nestedSubscription = scanRoll.WhenPropertyChanges(
-    x => x.ConfirmMainRollButton,
-    async (value) => await HandleButtonAsync(value)
-);
-
-// When no longer needed, unsubscribe
-subscription.Dispose();
-asyncSubscription.Dispose();
-nestedSubscription.Dispose();
-```
-
-**With old value (Lambda Expression):**
-
-```csharp
-var subscription = scanRoll.WhenPropertyValueChanges(
-    x => x.ConfirmSubRollButton,  // ← x. shows properties
+data.WhenPropertyChanges<int>(
+    nameof(MachineStatusData.TotalCounter),
     (oldValue, newValue) =>
     {
-        _logger.LogInformation($"ConfirmSubRollButton changed from {oldValue} to {newValue}");
-    }
-);
+        Console.WriteLine($"Counter: {oldValue} -> {newValue}");
+    });
+```
 
-// With async:
-var asyncSubscription = scanRoll.WhenPropertyValueChanges(
-    x => x.ConfirmSubRollButton,
-    async (oldValue, newValue) =>
+Use an async handler:
+
+```csharp
+data.WhenPropertyChanges<string>(
+    nameof(MachineStatusData.ProductCode),
+    async code =>
     {
-        _logger.LogInformation($"ConfirmSubRollButton changed from {oldValue} to {newValue}");
-        if (newValue)
-            await ProcessAsync();
-    }
-);
+        await SendProductCodeToMesAsync(code);
+    });
 ```
 
-**Advantages of Lambda Expression:**
-
-- ✅ Type-safe - Compiler checks property exists
-- ✅ Refactor-safe - Rename property automatically updates
-- ✅ IntelliSense support - Autocomplete property names
-- ✅ Supports nested properties (E.g: `x => x.ScanRollScreen.ConfirmMainRollButton`)
-
-### Method 2: Using PropertyChanged Event (Standard .NET)
-
-This approach follows MVVM pattern and .NET standards:
+Debounce noisy PLC updates to avoid repeated API calls:
 
 ```csharp
-var scanRoll = new HMIScanRollScreenData(_plc);
-
-// Subscribe to PropertyChanged event
-scanRoll.PropertyChanged += (s, e) =>
-{
-    if (e.PropertyName == "ConfirmSubRollButton")
+data.WhenPropertyChangesDebounced<string>(
+    nameof(MachineStatusData.ProductCode),
+    debounceMs: 300,
+    async code =>
     {
-        _logger.LogInformation($"ConfirmSubRollButton changed");
-    }
-};
+        await SendProductCodeToMesAsync(code);
+    });
 ```
 
-### Method 3: Using SetProperty Method (In Subclass)
+## Extension Methods
 
-When defining a subclass, can use SetProperty helper method:
+`PLCDataExtensions` provides helper methods for objects that inherit from `PLCDataContext`:
+
+| Method                       | Description                                                                                        |
+| ---------------------------- | -------------------------------------------------------------------------------------------------- |
+| `GetPLCProperties()`         | Gets properties with a `[PLCAddress]` attribute. Note: this method does not read runtime mappings. |
+| `CopyValuesFrom(source)`     | Copies values between two objects of the same type, based on attributed properties.                |
+| `ValuesEqual(other)`         | Compares values between two objects of the same type. Includes special handling for `short[]`.     |
+| `ExportToDictionary()`       | Exports values to a dictionary where keys are PLC addresses.                                       |
+| `ImportFromDictionary(data)` | Imports values from a dictionary where keys are PLC addresses.                                     |
+
+Example:
 
 ```csharp
-private bool _confirmSubRollButton;
+var snapshot = data.ExportToDictionary();
 
-public bool ConfirmSubRollButton
+var other = new QRScanData(plc);
+other.CopyValuesFrom(data);
+```
+
+## Custom Logging
+
+Override `CustomMessage` to add a prefix or customize error/change logs:
+
+```csharp
+public class MachineStatusData : PLCDataContext
 {
-    get => _confirmSubRollButton;
-    set => SetProperty(ref _confirmSubRollButton, value, nameof(ConfirmSubRollButton));
+    public MachineStatusData(McpX plc) : base(plc) { }
+
+    protected override string CustomMessage(string message)
+        => $"[Line A] {message}";
 }
 ```
 
-### Comparison of Methods
-
-| Method                       | Advantages                        | Disadvantages | Use Case                     |
-| ---------------------------- | --------------------------------- | ------------- | ---------------------------- |
-| WhenPropertyChanges (String) | Simple, runtime flexible          | Not type-safe | Quick prototyping            |
-| WhenPropertyChanges (Lambda) | Type-safe, IntelliSense, refactor | Longer syntax | Production code, recommended |
-| PropertyChanged Event        | Standard .NET, MVVM pattern       | Need handler  | MVVM app, complex binding    |
-| SetProperty                  | Clean, reusable                   | Need subclass | Property with backing field  |
-
-## Real-World Examples
-
-### Example 1: QR Scan (Using Attributes)
-
-```csharp
-private async Task HandleQRScanAsync()
-{
-    var qrData = new QRScanData1(_plc);
-
-    // Read scan status
-    await qrData.LoadAsync();
-
-    if (qrData.ScanCommand)
-    {
-        _logger.LogInformation($"Barcode: {qrData.QRBarcode}");
-
-        // Call API to process
-        var result = await _api.ProcessBarcodeAsync(qrData.QRBarcode);
-
-        if (result.IsValid)
-        {
-            // Update status
-            qrData.OkStatus = true;
-            qrData.RollID = result.RollId;
-            qrData.IsLocked = false;
-
-            // Write back
-            await qrData.SaveAsync();
-        }
-    }
-}
-```
-
-### Example 2: Using JSON Mapping
-
-```csharp
-private async Task InitializeWithMappingAsync()
-{
-    // Load mapping from JSON file
-    var json = File.ReadAllText("config/plc-mapping.json");
-    var fieldMaps = JsonSerializer.Deserialize<Dictionary<string, PLCAddressAttribute>>(json);
-
-    // Initialize with mapping
-    var mesData = new SendRollMES(_plc, fieldMaps);
-    var scanData = new QRScanData(_plc, fieldMaps);
-
-    // Read data
-    await mesData.LoadAsync();
-    await scanData.LoadAsync();
-
-    // Process...
-    await mesData.SaveAsync();
-    await scanData.SaveAsync();
-}
-```
-
-### Example 3: Managing Multiple Data Objects (Parallel)
-
-```csharp
-private async Task MainLoopAsync()
-{
-    var qrData1 = new QRScanData1(_plc);
-    var qrData2 = new QRScanData2(_plc);
-    var jobData = new JobData(_plc);
-    var control = new ControlData(_plc);
-
-    while (!stoppingToken.IsCancellationRequested)
-    {
-        // Read data in parallel
-        await Task.WhenAll(
-            qrData1.LoadAsync(),
-            qrData2.LoadAsync(),
-            jobData.LoadAsync(),
-            control.LoadAsync()
-        );
-
-        // Process logic
-        await ProcessScan1Async(qrData1);
-        await ProcessScan2Async(qrData2);
-        await ProcessJobAsync(jobData);
-
-        // Write data in parallel
-        await Task.WhenAll(
-            qrData1.SaveAsync(),
-            qrData2.SaveAsync(),
-            jobData.SaveAsync(),
-            control.SaveAsync()
-        );
-
-        await Task.Delay(50);
-    }
-}
-```
-
-### Example 4: Export/Import Data
-
-```csharp
-// Export data from PLC (storage/transmission)
-var qrData = new QRScanData1(_plc);
-await qrData.LoadAsync();
-
-// Get individual property values
-var scanCmd = qrData.ScanCommand;
-var barcode = qrData.QRBarcode;
-
-// Or serialize entire object
-var jsonData = JsonSerializer.Serialize(qrData);
-await _db.SaveHistoryAsync(jsonData);
-```
-
-### Example 5: Property Change Tracking
-
-This example shows how to track button presses and auto-trigger handlers:
-
-```csharp
-private async Task SetupPropertyTrackingAsync()
-{
-    var scanRoll = new HMIScanRollScreenData(_plc);
-    await scanRoll.LoadAsync();
-
-    // ===== Method 1: WhenPropertyChanges + Lambda Expression (Recommended) =====
-    // Lambda expression - Type-safe and easy to refactor
-    var subRollSubscription = scanRoll.WhenPropertyChanges(
-        x => x.ConfirmSubRollButton,
-        async (newValue) =>
-        {
-            if (newValue)  // When button is pressed
-            {
-                _logger.LogInformation("Sub Roll Button Confirmed!");
-                // Handle logic
-                await ProcessSubRollConfirmAsync(scanRoll);
-            }
-        }
-    );
-
-    // Subscribe with old value - Lambda Expression
-    var mainRollSubscription = scanRoll.WhenPropertyValueChanges(
-        x => x.ConfirmMainRollButton,
-        async (oldValue, newValue) =>
-        {
-            _logger.LogInformation($"MainRoll: {oldValue} -> {newValue}");
-            if (newValue)
-                await HandleMainRollChangeAsync();
-        }
-    );
-
-    // ===== Method 1B: WhenPropertyChanges + String (If runtime flexibility needed) =====
-    // String-based - Flexible but not type-safe
-    // var subscription = scanRoll.WhenPropertyChanges<bool>("Button", newValue => { ... });
-
-    // ===== Method 2: PropertyChanged Event (MVVM Pattern) =====
-    scanRoll.PropertyChanged += (s, e) =>
-    {
-        if (e.PropertyName == "IsMainRollValid" && s is HMIScanRollScreenData data)
-        {
-            _logger.LogInformation($"MainRoll Valid: {data.IsMainRollValid}");
-        }
-    };
-
-    // Main loop
-    while (!stoppingToken.IsCancellationRequested)
-    {
-        await scanRoll.LoadAsync();
-        await Task.Delay(100);
-
-        // Subscriptions will auto-trigger when property changes
-    }
-
-    // Cleanup
-    subRollSubscription?.Dispose();
-    mainRollSubscription?.Dispose();
-}
-
-private async Task ProcessSubRollConfirmAsync(HMIScanRollScreenData scanRoll)
-{
-    var qrCode = scanRoll.SubRollQRCode;
-    _logger.LogInformation($"Processing QR: {qrCode}");
-
-    // Call API to process
-    var result = await _api.ValidateQRCodeAsync(qrCode);
-
-    if (result.IsValid)
-    {
-        scanRoll.IsSubRollValid = true;
-    }
-
-    await scanRoll.SaveAsync();
-}
-```
-
-**Benefits of Property Change Tracking:**
-
-- ✅ Auto-trigger handler when property changes
-- ✅ No need for polling or manual checks
-- ✅ Type-safe callbacks
-- ✅ Easy cleanup with `.Dispose()`
-- ✅ Support both old/new values
-
-## Performance Optimization
-
-### Selective Read/Write (Performance)
-
-Instead of reading/writing all data, can read/write only needed properties:
-
-```csharp
-// Only read Scan property
-var scanCmd = await data.ReadValueAsync("ScanCommand");
-
-// Only write OkStatus property
-await data.WriteValueAsync("OkStatus", true);
-```
-
-### Batch Operations (Faster)
-
-When working with multiple data objects, use `Task.WhenAll()` to read/write in parallel:
-
-```csharp
-// Read data in parallel
-await Task.WhenAll(
-    data1.LoadAsync(),
-    data2.LoadAsync(),
-    data3.LoadAsync()
-);
-
-// Write data in parallel
-await Task.WhenAll(
-    data1.SaveAsync(),
-    data2.SaveAsync(),
-    data3.SaveAsync()
-);
-```
-
-## Troubleshooting
-
-### Error: "Unknown device type"
-
-Ensure address starts with `M` or `D`:
-
-```csharp
-[PLCAddress("M100")]  // M-register: Boolean
-[PLCAddress("D100")]  // D-register: Word-based
-
-// Or in JSON mapping:
-{
-    "MyFlag": {
-        "address": "M100",
-        "length": 1
-    }
-}
-```
-
-### Error: Data Not Changing
-
-Must call `SaveAsync()` after changing a property:
-
-```csharp
-data.Speed = 500;
-await data.SaveAsync(); // Required!
-```
-
-### Error: Mapping Not Found
-
-When using JSON mapping, ensure the keys in JSON match property names:
-
-```json
-{
-  "ScanCommand": {
-    "address": "M6011",
-    "length": 1
-  }
-}
-```
-
-```csharp
-public class MyData : PLCDataContext
-{
-    public bool ScanCommand { get; set; }  // Must match "ScanCommand" in JSON
-}
-```
-
-### Error: Properties Not Loaded
-
-Check:
-
-1. Does property have `[PLCAddress]` attribute or declared in JSON mapping?
-2. Called `LoadAsync()` yet?
-
-```csharp
-// ✗ Wrong: Not reading from PLC
-var data = new MyData(_plc);
-var value = data.MyProperty; // Value is default (0, false, "")
-
-// ✓ Correct: Read from PLC first
-var data = new MyData(_plc);
-await data.LoadAsync();
-var value = data.MyProperty; // Value from PLC
-```
+## Implementation Notes
+
+- Each low-level read/write operation uses an internal `SemaphoreSlim` to lock access to `McpX`.
+- Addresses must start with a prefix defined in `McpXLib.Enums.Prefix`, such as `M` or `D`.
+- `ReadValueAsync(string)` returns the value only; it does not update the property on the object.
+- `SaveAsync()` writes all mapped properties except those marked `readOnly`.
+- For `string` and `short[]`, declare `length` explicitly to avoid reading or writing incomplete data.
