@@ -187,6 +187,13 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
         }
     }
 
+    public async Task SavePropertyAsync(string propertyName)
+    {
+        var property = GetType().GetProperty(propertyName);
+        if (property == null) return;
+        await SavePropertyAsync(property);
+    }
+
     /// <summary>
     /// Reads a specific property from PLC.
     /// </summary>
