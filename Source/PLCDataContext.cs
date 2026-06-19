@@ -35,7 +35,7 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
 
     private readonly SemaphoreSlim PlcLock = new(1, 1);
 
-    private IEnumerable<PropertyInfo> Properties => GetType().GetProperties().Where(p => GetPLCAddressInfo(p) != null);
+    private IEnumerable<PropertyInfo> Properties => GetType().GetProperties();
 
     /// <summary>
     /// CallBack for custom logging or debugging. Can be overridden by derived classes to implement specific logging behavior.
@@ -50,16 +50,18 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
     protected PLCAddressAttribute? GetPLCAddressInfo(PropertyInfo property)
     {
         var attr = property.GetCustomAttribute<PLCAddressAttribute>();
-        // if mapping exists and has entry for this property, use it to create PLCAddressAttribute
-        if (mapping != null && mapping.TryGetValue(property.Name, out var fieldMap))
-            return new PLCAddressAttribute(fieldMap?.Address ?? attr?.Address ?? string.Empty,
-                fieldMap?.Length ?? attr?.Length ?? 0,
-                fieldMap?.Description ?? attr?.Description,
-                fieldMap?.ReadOnly ?? attr?.ReadOnly ?? false
-            );
 
-        // if not, get from attribute
-        return attr;
+        if (mapping?.TryGetValue(property.Name, out var fieldMap) != true)
+            return attr;
+
+        var result = new PLCAddressAttribute(
+            fieldMap?.Address ?? attr?.Address ?? string.Empty,
+            fieldMap?.Length ?? attr?.Length ?? 0,
+            fieldMap?.Description ?? attr?.Description,
+            fieldMap?.ReadOnly ?? attr?.ReadOnly ?? false
+        );
+
+        return string.IsNullOrEmpty(result.Address) ? null : result;
     }
 
     /// <summary>
@@ -156,7 +158,8 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
     {
         try
         {
-            var attr = GetPLCAddressInfo(property)!;
+            var attr = GetPLCAddressInfo(property);
+            if (attr == null) return;
             var value = await ReadValueAsync(property, attr);
             SetPropertyValue(property, value);
         }
@@ -176,7 +179,8 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
     {
         try
         {
-            var attr = GetPLCAddressInfo(property)!;
+            var attr = GetPLCAddressInfo(property);
+            if (attr == null) return;
             var value = property.GetValue(this);
             await WriteValueAsync(property, attr, value);
         }
