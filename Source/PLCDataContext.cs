@@ -86,6 +86,7 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
 
         return (matchedPrefix, addressPart);
     }
+    #region Async
 
     /// <summary>
     /// Reads all properties from PLC into the object.
@@ -323,6 +324,160 @@ public abstract partial class PLCDataContext : INotifyPropertyChanged
             await WriteWordsAsync(attr.Address, arrValue);
         }
     }
+
+    #endregion
+
+    #region Sync
+
+    /// <summary>
+    /// Reads all properties from PLC into the object
+    /// </summary>
+    /// <returns></returns>
+    public virtual void LoadAll()
+    {
+        foreach (var property in Properties)
+            LoadProperty(property);
+    }
+
+    /// <summary>
+    /// Writes all properties from object to PLC.
+    /// </summary>
+    public virtual void SaveAll()
+    {
+        foreach (var property in Properties)
+            SaveProperty(property);
+    }
+
+    /// <summary>
+    /// Reads a specific property from PLC and updates the property value.
+    /// </summary>
+    /// <param name="property"></param>
+    /// <returns></returns>
+    public void LoadProperty(PropertyInfo property)
+    {
+        try
+        {
+            var attr = GetPLCAddressInfo(property);
+            if (attr == null) return;
+            var value = ReadValue(property, attr);
+            SetPropertyValue(property, value);
+        }
+        catch (Exception ex)
+        {
+            Printt.Red(CustomMessage($"Error loading property {property.Name}: {ex.Message}"));
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Writes a specific property value to PLC.
+    /// </summary>
+    /// <param name="property"></param>
+    /// <returns></returns>
+    public void SaveProperty(PropertyInfo property)
+    {
+        try
+        {
+            var attr = GetPLCAddressInfo(property);
+            if (attr == null) return;
+            var value = property.GetValue(this);
+            WriteValue(property, attr, value);
+        }
+        catch (Exception ex)
+        {
+            Printt.Red(CustomMessage($"Error saving property {property.Name}: {ex.Message}"));
+            throw;
+        }
+    }
+
+    public void SaveProperty(string propertyName)
+    {
+        var property = GetType().GetProperty(propertyName);
+        if (property == null) return;
+        SaveProperty(property);
+    }
+
+    /// <summary>
+    /// Reads a specific property from PLC.
+    /// </summary>
+    public object? ReadValue(string propertyName)
+    {
+        var property = GetType().GetProperty(propertyName);
+        if (property == null) return null;
+
+        var attr = GetPLCAddressInfo(property);
+        if (attr == null) return null;
+
+        return ReadValue(property, attr);
+    }
+
+    /// <summary>
+    /// Writes a specific property to PLC.
+    /// </summary>
+    public void WriteValue(string propertyName, object? value)
+    {
+        var property = GetType().GetProperty(propertyName);
+        if (property == null) return;
+
+        var attr = GetPLCAddressInfo(property);
+        if (attr == null) return;
+
+        WriteValue(property, attr, value);
+    }
+
+    /// <summary>
+    /// Internal: Reads value from PLC based on data type.
+    /// </summary>
+    public object? ReadValue(PropertyInfo property, PLCAddressAttribute attr)
+    {
+        try
+        {
+            var propertyType = property.PropertyType;
+            var effectiveLength = PLCTypeHelper.GetEffectiveLength(property, attr);
+            var (prefix, addr) = ParseAddress(attr.Address);
+
+            if (propertyType == typeof(string))
+                return PlcDevice.ReadString(prefix, addr, effectiveLength).Trim();
+            var method = typeof(McpX).GetMethod(nameof(McpX.Read))!.MakeGenericMethod(propertyType);
+            return method.Invoke(PlcDevice, new object[] { prefix, addr });
+        }
+        catch (Exception ex)
+        {
+            Printt.Red(CustomMessage($"Error {nameof(ReadValue)} at {attr.Address}: {ex.Message}"));
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Internal: Writes value to PLC based on data type.
+    /// </summary>
+    public void WriteValue(PropertyInfo property, PLCAddressAttribute attr, object? value)
+    {
+        if (attr.ReadOnly) return; // Skip read-only properties
+
+        try
+        {
+            var propertyType = property.PropertyType;
+            var effectiveLength = PLCTypeHelper.GetEffectiveLength(property, attr);
+            var (prefix, addr) = ParseAddress(attr.Address);
+
+            if (propertyType == typeof(string))
+            {
+                var strValue = value?.ToString() ?? string.Empty;
+                PlcDevice.WriteString(prefix, addr, strValue);
+                return;
+            }
+            var method = typeof(McpX).GetMethod(nameof(McpX.Write))!.MakeGenericMethod(propertyType);
+            method.Invoke(PlcDevice, new object[] { prefix, addr, value! });
+        }
+        catch (Exception ex)
+        {
+            Printt.Red(CustomMessage($"Error {nameof(WriteValue)} at {attr.Address}: {ex.Message}"));
+            throw;
+        }
+    }
+
+    #endregion
 
     public string ToJsonString() => JsonConvert.SerializeObject(this);
 
